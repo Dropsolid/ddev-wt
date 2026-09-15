@@ -1,4 +1,4 @@
-# ddev-worktree project configuration
+# ddev-wt project configuration
 # Place this file at .ddev/worktree.yaml (it is gitignored).
 
 # Drush alias prefix — used for sql:sync, e.g. @myproject.staging

@@ -8,7 +8,7 @@
 setup() {
   set -eu -o pipefail
   export DDEV_NONINTERACTIVE=true
-  export PROJNAME=ddev-worktree-test
+  export PROJNAME=ddev-wt-test
   export TESTDIR=$(mktemp -d)
   export DIR="${TESTDIR}/${PROJNAME}"
   mkdir -p "$DIR"

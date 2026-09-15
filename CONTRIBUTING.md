@@ -1,4 +1,4 @@
-# Contributing to ddev-worktree
+# Contributing to ddev-wt
 
 Thanks for considering a contribution. This add-on is maintained as open
 source, and PRs are welcome.
@@ -16,7 +16,7 @@ Bash 3.2 for stock macOS) sourcing the shared helpers in `worktree-lib/lib.sh`.
 To test changes locally against a real project:
 
 ```bash
-ddev add-on get /path/to/your/local/ddev-worktree
+ddev add-on get /path/to/your/local/ddev-wt
 ddev restart
 ```
 

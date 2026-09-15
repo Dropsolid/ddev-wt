@@ -1,5 +1,5 @@
 #ddev-generated
-name: ddev-worktree
+name: wt
 
 project_files:
   - commands/host/wt-add
@@ -34,22 +34,22 @@ post_install_actions:
   - |
     #ddev-description:Add the add-on's paths to the project .gitignore
     GITIGNORE="../.gitignore"
-    if [ -f "$GITIGNORE" ] && ! grep -qF "ddev-worktree add-on" "$GITIGNORE"; then
+    if [ -f "$GITIGNORE" ] && ! grep -qF "ddev-wt add-on" "$GITIGNORE"; then
       cat >> "$GITIGNORE" <<'GITIGNORE_BLOCK'
 
-    # ddev-worktree add-on — remove this block to commit the add-on to the project
+    # ddev-wt add-on — remove this block to commit the add-on to the project
     .ddev/commands/host/wt-*
     .ddev/worktree-hooks/
     .ddev/worktree-lib/
     .ddev/worktree-shell/
     .ddev/worktree-templates/
     .ddev/worktree.yaml
-    .ddev/addon-metadata/ddev-worktree/
+    .ddev/addon-metadata/wt/
     GITIGNORE_BLOCK
-      echo "Added ddev-worktree block to .gitignore (remove the block to commit the add-on)."
+      echo "Added ddev-wt block to .gitignore (remove the block to commit the add-on)."
     fi
   - "echo ''"
-  - "echo 'ddev-worktree installed successfully!'"
+  - "echo 'ddev-wt installed successfully!'"
   - "echo '  1. Run: ddev wt-hooks-install   (enable safety git hooks)'"
   - "echo '  2. Run: ddev wt-shell-install   (install wt shell switcher)'"
   - "echo '  3. Run: ddev wt-add <branch>    (create your first worktree)'"

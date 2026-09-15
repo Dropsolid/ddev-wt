@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #ddev-generated
-# ddev-worktree: pre-push safety hook
+# ddev-wt: pre-push safety hook
 # Confirms all pushes with context banner.
 # Requires typing the branch name when a protected branch is being updated.
 # Requires extra confirmation when force-pushing.

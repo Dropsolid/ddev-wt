@@ -1,4 +1,4 @@
-# ddev-worktree: wt — switch between git worktrees
+# ddev-wt: wt — switch between git worktrees
 # Install with: ddev wt-shell-install
 # Usage: wt [partial-name | number | main | ls]
 

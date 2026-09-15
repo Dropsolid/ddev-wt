@@ -15,7 +15,7 @@ while [[ -L "$_wt_src" ]]; do
 done
 _wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
 [[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
-[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+[[ -f "$_wt_lib" ]] || { echo "ddev-wt: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
 source "$_wt_lib"
 
 # Portable sed -i (macOS BSD sed requires an empty-string backup suffix)
@@ -87,8 +87,8 @@ case "$SHELL_NAME" in
       RC="${HOME}/.bashrc"
     fi
 
-    MARKER="# ddev-worktree: wt function"
-    END_MARKER="# ddev-worktree: end wt function"
+    MARKER="# ddev-wt: wt function"
+    END_MARKER="# ddev-wt: end wt function"
 
     if grep -qF "$MARKER" "$RC" 2>/dev/null; then
       if [[ "$FORCE" == "false" ]]; then

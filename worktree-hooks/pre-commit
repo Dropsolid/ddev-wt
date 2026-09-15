@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #ddev-generated
-# ddev-worktree: pre-commit safety hook
+# ddev-wt: pre-commit safety hook
 # Shows a clear worktree/branch context banner before every commit.
 # Blocks direct commits to main/master (override with --no-verify).
 

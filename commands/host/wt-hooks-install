@@ -15,7 +15,7 @@ while [[ -L "$_wt_src" ]]; do
 done
 _wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
 [[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
-[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+[[ -f "$_wt_lib" ]] || { echo "ddev-wt: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
 source "$_wt_lib"
 
 FORCE=false
@@ -50,11 +50,11 @@ for hook in pre-commit pre-push; do
 
   if [[ -f "$dst" ]] && [[ "$FORCE" == "false" ]]; then
     # Check if it's already our hook
-    if grep -q "ddev-worktree" "$dst" 2>/dev/null; then
+    if grep -q "ddev-wt" "$dst" 2>/dev/null; then
       info "Hook already installed: ${hook}"
       ((skipped++)) || true
     else
-      warn "Existing ${hook} hook found (not from ddev-worktree). Use --force to overwrite."
+      warn "Existing ${hook} hook found (not from ddev-wt). Use --force to overwrite."
       ((skipped++)) || true
     fi
     continue

@@ -1,4 +1,4 @@
-# ddev-worktree: wt-ai — switch to a worktree and start a Claude Code session
+# ddev-wt: wt-ai — switch to a worktree and start a Claude Code session
 # Install with: ddev wt-shell-install
 # Usage: wt-ai [partial-name | number | main]
 # Override AI tool: set -x WORKTREE_AI_CMD cursor

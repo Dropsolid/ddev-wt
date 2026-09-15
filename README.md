@@ -1,4 +1,4 @@
-# ddev-worktree
+# ddev-wt
 
 A DDEV add-on for managing git worktrees — create fully isolated environments for feature branches, MR reviews, and parallel AI-assisted development sessions, each with their own DDEV instance, database, and URL.
 
@@ -32,22 +32,20 @@ specific commands if present:
 ## Install
 
 ```bash
-ddev add-on get <owner>/ddev-worktree
+ddev add-on get Dropsolid/ddev-wt
 ddev restart
 ddev wt-hooks-install   # git safety hooks
 ddev wt-shell-install   # wt shell switcher
 ```
 
-Replace `<owner>/ddev-worktree` with wherever this repo ends up living (a GitHub
-`org/repo`, once published to the DDEV add-on registry). To pin a specific release
-instead of the latest tag, add `--version v0.2.0`.
+To pin a specific release instead of the latest tag, add `--version v0.2.0`.
 
 Installing from source instead of the registry works too — clone the repo and
 point `ddev add-on get` at the local path:
 
 ```bash
-git clone https://github.com/<owner>/ddev-worktree.git /tmp/ddev-worktree
-ddev add-on get /tmp/ddev-worktree
+git clone https://github.com/Dropsolid/ddev-wt.git /tmp/ddev-wt
+ddev add-on get /tmp/ddev-wt
 ```
 
 A `.ddev/worktree.yaml` config file is auto-generated on first use. Review it and adjust `project_name` if the Drush alias differs from the repo name.
@@ -57,7 +55,7 @@ A `.ddev/worktree.yaml` config file is auto-generated on first use. Review it an
 The install appends a marker-guarded block to the project's `.gitignore` covering
 everything the add-on puts in `.ddev/` (the `wt-*` commands, `worktree-hooks/`,
 `worktree-lib/`, `worktree-shell/`, `worktree-templates/`, `worktree.yaml`, and
-its own `addon-metadata/ddev-worktree/` entry) — so `ddev add-on get` never
+its own `addon-metadata/wt/` entry) — so `ddev add-on get` never
 leaves the repo dirty. The add-on is treated as personal developer tooling by
 default.
 
