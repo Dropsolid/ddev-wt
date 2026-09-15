@@ -124,7 +124,7 @@ esac
 echo ""
 echo -e "${BOLD}Usage:${NC}"
 echo -e "  ${CYAN}wt${NC}            interactive picker (arrow keys + enter, or numbered list)"
-echo -e "  ${CYAN}wt 57${NC}         partial match  →  feature-VREEMDEVO-57"
+echo -e "  ${CYAN}wt 57${NC}         partial match  →  feature-PROJ-57"
 echo -e "  ${CYAN}wt main${NC}       jump to main checkout"
 echo -e "  ${CYAN}wt 2${NC}          jump by number"
 echo -e "  ${CYAN}wt ls${NC}         list all worktrees with status"

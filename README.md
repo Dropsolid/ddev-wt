@@ -31,40 +31,24 @@ specific commands if present:
 
 ## Install
 
-The add-on isn't on the public DDEV registry yet, so `ddev add-on get <owner>/ddev-worktree`
-doesn't work — install it from the internal GitLab source instead. `ddev add-on get`
-can't fetch an arbitrary git URL directly (it expects a real tarball response, and a
-plain `.git` URL doesn't serve one — you'll get `gzip: invalid header` if you try),
-so clone first and point it at the local copy:
-
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-addon_repo="git@internal.dropsolid.com:dropsolid-agency/ddev-addons/ddev-worktree.git"
-tmp_dir="$(mktemp -d)"
-trap 'rm -rf "$tmp_dir"' EXIT
-
-# -o BatchMode=yes: fail fast instead of hanging on an unanswerable prompt
-# (unknown host key, or a passphrase-protected key with no TTY in this context)
-GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" \
-  git clone --depth=1 "$addon_repo" "$tmp_dir/addon"
-
-ddev add-on get "$tmp_dir/addon"
+ddev add-on get <owner>/ddev-worktree
 ddev restart
 ddev wt-hooks-install   # git safety hooks
 ddev wt-shell-install   # wt shell switcher
 ```
 
-To pin a specific release instead of whatever's newest on `master`, add
-`--branch v0.2.0` to the `git clone` line (see available tags with
-`git ls-remote --tags git@internal.dropsolid.com:dropsolid-agency/ddev-addons/ddev-worktree.git`).
+Replace `<owner>/ddev-worktree` with wherever this repo ends up living (a GitHub
+`org/repo`, once published to the DDEV add-on registry). To pin a specific release
+instead of the latest tag, add `--version v0.2.0`.
 
-If `git clone` hangs rather than failing, it's almost always the SSH connection, not
-the add-on: verify with `ssh -v -o ConnectTimeout=10 -o BatchMode=yes -T git@internal.dropsolid.com`
-first — that fails fast and tells you whether it's an unreachable host (check VPN),
-an unaccepted host key (connect once interactively to accept it), or a
-passphrase-protected key with no terminal to prompt on (`ssh-add` it first).
+Installing from source instead of the registry works too — clone the repo and
+point `ddev add-on get` at the local path:
+
+```bash
+git clone https://github.com/<owner>/ddev-worktree.git /tmp/ddev-worktree
+ddev add-on get /tmp/ddev-worktree
+```
 
 A `.ddev/worktree.yaml` config file is auto-generated on first use. Review it and adjust `project_name` if the Drush alias differs from the repo name.
 
@@ -83,7 +67,9 @@ and commit the files.
 
 ## One-time setup: private Composer credentials
 
-If your projects pull packages from a private GitLab registry (e.g. `gitlab.internal.dropsolid.com`), set this up once on your machine. It will work for every DDEV project — including every new worktree — without any per-project steps.
+If your projects pull packages from a private Composer registry (a private GitLab or
+Packagist instance, for example), set this up once on your machine. It will work for
+every DDEV project — including every new worktree — without any per-project steps.
 
 DDEV mounts `~/.ddev/homeadditions/` into every container's home directory. A symlink from there to your global Composer `auth.json` is all that's needed.
 
@@ -93,18 +79,19 @@ DDEV mounts `~/.ddev/homeadditions/` into every container's home directory. A sy
 mkdir -p ~/.ddev/homeadditions/.composer
 ```
 
-Then create `~/.ddev/homeadditions/.composer/auth.json` with your token:
+Then create `~/.ddev/homeadditions/.composer/auth.json` with your token (the exact
+key depends on your registry — GitLab's is `gitlab-token`, generic HTTP basic auth
+uses `http-basic`; see the [Composer docs](https://getcomposer.org/doc/articles/authentication-for-private-packages.md)):
 
 ```json
 {
     "gitlab-token": {
-        "gitlab.internal.dropsolid.com": "YOUR_PERSONAL_ACCESS_TOKEN"
+        "gitlab.example.com": "YOUR_PERSONAL_ACCESS_TOKEN"
     }
 }
 ```
 
-Get a token at: `https://gitlab.internal.dropsolid.com/-/user_settings/personal_access_tokens`
-Required scope: **`read_api`**
+Get a token from your registry's personal access token settings page.
 
 **2. Verify it's visible inside containers:**
 
@@ -143,17 +130,16 @@ project's exact hostname, every worktree fails at the application layer with:
 even though DDEV itself is running fine — this is Drupal rejecting the `Host` header,
 not a DDEV or add-on problem.
 
-On Dropsolid projects this setting typically lives in
-`etc/drupal/additional_settings.local.php`. That file is gitignored and **copied fresh
-into every worktree from the root project's copy** (same per-environment convention as
-`.ddev/drupal/`), so fixing it once in the main checkout's copy is enough to cover every
-worktree created afterwards. Worktrees that already exist need the same fix applied to
-their own copy of the file (or need to be recreated).
+This setting typically lives in `settings.php` or a gitignored per-environment
+settings include. If that file is regenerated per environment (rather than committed),
+fixing it once in the main checkout is enough to cover every worktree created
+afterwards — worktrees that already exist need the same fix applied to their own copy
+(or need to be recreated).
 
 ```php
 // Trusted host
 $settings['trusted_host_patterns'] = [
-  '^ds\-myproject\.ddev\.site$',   // main project — keep the trailing $ anchor
+  '^myproject\.ddev\.site$',       // main project — keep the trailing $ anchor
   '^wt\-.+\.ddev\.site$',          // every worktree (matches worktree_prefix: 'wt')
   '^localhost$',
 ];
@@ -169,20 +155,20 @@ editing; just reload the worktree's URL.
 
 | Scenario | Command | What happens |
 |---|---|---|
-| Track existing remote branch | `ddev wt-add feature/VREEMDEVO-57` | Checks out from `origin/feature/VREEMDEVO-57` |
-| Create new branch from main | `ddev wt-add feature/DS-123` | Creates new local branch from HEAD |
-| Create new branch from develop | `ddev wt-add feature/DS-123 --from=develop` | Creates from `develop` |
+| Track existing remote branch | `ddev wt-add feature/PROJ-57` | Checks out from `origin/feature/PROJ-57` |
+| Create new branch from main | `ddev wt-add feature/PROJ-123` | Creates new local branch from HEAD |
+| Create new branch from develop | `ddev wt-add feature/PROJ-123 --from=develop` | Creates from `develop` |
 | Relative path + branch | `ddev wt-add ../review origin/epic/branch` | Create worktree in `../review` |
-| Absolute path + branch | `ddev wt-add /var/www/custom feature/DS-123` | Create worktree at absolute path |
-| Custom folder name | `ddev wt-add my-folder feature/DS-123` | Create in existing **empty** `my-folder/` directory |
+| Absolute path + branch | `ddev wt-add /var/www/custom feature/PROJ-123` | Create worktree at absolute path |
+| Custom folder name | `ddev wt-add my-folder feature/PROJ-123` | Create in existing **empty** `my-folder/` directory |
 
-New branches are local until you push: `git push -u origin feature/DS-123`
+New branches are local until you push: `git push -u origin feature/PROJ-123`
 
 ### Custom paths and folders
 
 The improved argument parser supports flexible path specifications:
 
-- **Auto-derived paths** (default): `ddev wt-add feature/DS-123` → `worktrees/feature-DS-123/`
+- **Auto-derived paths** (default): `ddev wt-add feature/PROJ-123` → `worktrees/feature-PROJ-123/`
 - **Relative paths**: `ddev wt-add ../sibling-path origin/branch`
 - **Absolute paths**: `ddev wt-add /var/www/external feature/branch`
 - **Existing directories**: `ddev wt-add custom-folder feature/branch` (if `custom-folder/` exists and is empty)
@@ -194,28 +180,28 @@ For absolute paths, the parent directory must exist before running `wt-add`.
 
 ```bash
 # New branch (local) — good for starting fresh work
-ddev wt-add feature/DS-123
-ddev wt-add feature/DS-123 --from=develop    # branch from develop
+ddev wt-add feature/PROJ-123
+ddev wt-add feature/PROJ-123 --from=develop    # branch from develop
 
 # Existing remote branch — good for reviews / QA
-ddev wt-add feature/VREEMDEVO-57
+ddev wt-add feature/PROJ-57
 
 # Custom locations
-ddev wt-add /var/www/external feature/DS-123      # absolute path
+ddev wt-add /var/www/external feature/PROJ-123      # absolute path
 ddev wt-add ../sibling-review origin/epic/branch  # relative path
 
 # AI session — creates worktree + opens it in Cursor/VS Code automatically
-ddev wt-ai feature/DS-123
+ddev wt-ai feature/PROJ-123
 
 # In your main project directory
-ddev wt-add feature/DS-123
-# → creates worktrees/feature-DS-123/
-# → sets up DDEV (wt-feature-DS-123.ddev.site)
+ddev wt-add feature/PROJ-123
+# → creates worktrees/feature-PROJ-123/
+# → sets up DDEV (wt-feature-PROJ-123.ddev.site)
 # → runs composer install automatically
 
 # Sync the database
-ssh-add ~/.ssh/id_rsa_dropsolid       # load SSH key once per session
-cd worktrees/feature-DS-123
+ssh-add ~/.ssh/id_rsa_myproject       # load SSH key once per session
+cd worktrees/feature-PROJ-123
 ddev wt-sync                    # DB from staging
 ddev wt-sync --env=live         # DB from live
 
@@ -231,7 +217,7 @@ ddev wt-status                  # per-worktree details
 
 # Remove when done
 wt main
-ddev wt-remove feature-DS-123
+ddev wt-remove feature-PROJ-123
 ```
 
 ## The `wt` shell switcher
@@ -245,7 +231,7 @@ ddev wt-shell-install           # auto-detects fish / bash / zsh
 | Command | Action |
 |---|---|
 | `wt` | Interactive picker — arrow keys + Enter (requires fzf) or numbered list |
-| `wt 57` | Partial match on name or branch → `feature-VREEMDEVO-57` |
+| `wt 57` | Partial match on name or branch → `feature-PROJ-57` |
 | `wt main` | Jump to main checkout |
 | `wt 2` | Jump by number |
 | `wt ls` | List all worktrees with current indicator |
@@ -262,18 +248,18 @@ sudo apt install fzf     # or brew install fzf
 ```yaml
 project_name: 'myproject'       # Drush alias prefix: @myproject.staging
 default_env: 'staging'          # Default remote for ddev wt-sync
-ssh_key: '~/.ssh/id_rsa_dropsolid'  # Only this key is loaded for wt-sync (optional)
+ssh_key: '~/.ssh/id_rsa_myproject'  # Only this key is loaded for wt-sync (optional)
 protected_branches:             # Push confirmation — entries EXTEND the built-in defaults
   - main
   - master
   - develop
   - production
   - staging
-worktree_prefix: 'wt'           # DDEV project name prefix: wt-feature-DS-123
+worktree_prefix: 'wt'           # DDEV project name prefix: wt-feature-PROJ-123
 worktrees_dir: 'worktrees'      # Relative to project root, or absolute path like '/var/www/worktrees'
 
 # Optional: .ddev files/dirs your project regenerates per environment via a
-# pre-start hook (e.g. Dropsolid's `ddp`). The add-on won't symlink/copy these —
+# pre-start hook or scaffolding tool. The add-on won't symlink/copy these —
 # the hook recreates them in each worktree. Omit if you have no such generator.
 generated_ddev_files:
   - docker-compose.drupal.yaml
@@ -282,7 +268,7 @@ generated_ddev_files:
 
 **Notes**:
 - `worktrees_dir` supports absolute paths — set it to `/var/www/worktrees` to store worktrees outside the project.
-- `generated_ddev_files` prevents conflicts with project generators that **write** `.ddev` files on start. Symlinking a file the generator wants to overwrite breaks it (e.g. ddp's `Failed to copy … docker-compose.drupal.yaml`); listing it here lets the generator own it.
+- `generated_ddev_files` prevents conflicts with project generators that **write** `.ddev` files on start. Symlinking a file the generator wants to overwrite breaks it (e.g. `Failed to copy … docker-compose.drupal.yaml`); listing it here lets the generator own it.
 
 ## How `.ddev` is managed in worktrees
 
@@ -297,12 +283,12 @@ generated_ddev_files:
 | `config.local.yaml` | **Generated** fresh | Unique project name **and** a self-scoped `*.<name>` wildcard hostname per worktree |
 | `host/` commands | **Symlink** to main | Run on the host, where a symlink to main resolves; updates propagate automatically |
 | `web/` & service commands | **Copy** from main | Run *inside* a container where main's path isn't mounted — a symlink would dangle (`deploy: No such file or directory`) |
-| files in `generated_ddev_files` | **Skipped** | The project's pre-start hook (e.g. ddp) regenerates them per worktree |
+| files in `generated_ddev_files` | **Skipped** | The project's pre-start hook regenerates them per worktree |
 
 ### Subdomains (admin.*, api.*, …) on a worktree
 
-Dropsolid's main `ds-<project>` DDEV projects typically declare
-`additional_hostnames: ["*.ds-<project>"]`, which is why `admin.ds-<project>.ddev.site`
+A project's main DDEV config commonly declares
+`additional_hostnames: ["*.<project>"]`, which is why `admin.<project>.ddev.site`
 works on the main checkout. `config.yaml` is **symlinked** into every worktree, so
 that entry is stuck with the main project's literal name — it can never match a
 worktree's own hostname, which is why `admin.wt-<branch>.ddev.site` doesn't work by
@@ -312,12 +298,12 @@ default.
 worktree's *own* name into its `config.local.yaml`:
 
 ```yaml
-name: wt-feature-DS-123
+name: wt-feature-PROJ-123
 additional_hostnames:
-  - "*.wt-feature-DS-123"
+  - "*.wt-feature-PROJ-123"
 ```
 
-So `admin.wt-feature-DS-123.ddev.site`, `api.wt-feature-DS-123.ddev.site`, etc. work
+So `admin.wt-feature-PROJ-123.ddev.site`, `api.wt-feature-PROJ-123.ddev.site`, etc. work
 the same way they do on main — no extra config needed for new worktrees.
 
 **Worktrees created before this feature** need one repair + restart to pick it up
@@ -355,7 +341,7 @@ staging`) **plus** any `protected_branches` entries in `.ddev/worktree.yaml`.
 
 1. Skips `composer install` if `vendor/` is newer than `composer.lock`
 2. Runs `ddev auth ssh` to forward SSH keys into the container
-3. Dumps env vars via `dxp:env-var:dump` (if the Drush command exists)
+3. Dumps env vars via the command configured in `env_var_dump_command` (if set, and the Drush command exists)
 4. Syncs DB: `drush sql:sync @project.env @self -y`
 5. Runs deploy: `ddev deploy` or `drush updatedb + cache:rebuild`
 
@@ -370,7 +356,7 @@ auth step and the DB sync fails. If you have multiple keys, tell the add-on whic
 one this project needs in `.ddev/worktree.yaml`:
 
 ```yaml
-ssh_key: '~/.ssh/id_rsa_dropsolid'
+ssh_key: '~/.ssh/id_rsa_myproject'
 ```
 
 `wt-sync` then runs `ddev auth ssh -f <key>` and you're only ever asked for that
@@ -382,7 +368,7 @@ survives until Docker restarts, so the passphrase is needed at most once per boo
 ```
 main checkout          worktrees/feature-A     worktrees/feature-B
       │                        │                       │
-vreemdelingenrecht.ddev.site   wt-feature-A.ddev.site  wt-feature-B.ddev.site
+  myproject.ddev.site    wt-feature-A.ddev.site  wt-feature-B.ddev.site
       │                        │                       │
   Your work               AI agent #1             AI agent #2
 ```
@@ -408,12 +394,12 @@ so it never shows up in `git status`, regardless of what each branch's
 Example workflow:
 ```bash
 # Create worktree for AI work
-ddev wt-ai feature/DS-123
+ddev wt-ai feature/PROJ-123
 
 # Claude automatically knows:
-# - It's in worktree: feature-DS-123
-# - Commits go to: feature/DS-123
-# - DDEV URL: https://wt-feature-DS-123.ddev.site
+# - It's in worktree: feature-PROJ-123
+# - Commits go to: feature/PROJ-123
+# - DDEV URL: https://wt-feature-PROJ-123.ddev.site
 # - How to sync the DB, run tests, etc.
 ```
 
@@ -475,7 +461,7 @@ export WORKTREE_EDITOR=cursor    # or code, phpstorm, windsurf
 ### "The provided host name is not valid for this server" on a worktree URL
 **Solution**: See [Trusted host patterns across worktrees](#trusted-host-patterns-across-worktrees) —
 `trusted_host_patterns` needs a pattern covering `wt-*.ddev.site`, typically in
-`etc/drupal/additional_settings.local.php` on Dropsolid projects.
+`settings.php` or a per-environment settings include.
 
 ### Custom protected branches don't seem protected
 **Solution**: Reinstall the hooks so they pick up the fixed config parser:
@@ -492,4 +478,3 @@ into each worktree).
 
 - [DDEV blog: git worktrees for contributor training](https://ddev.com/blog/git-worktree-contributor-training/) — Randy Fay
 - [processwire-ddev-worktree](https://github.com/webmanufaktur/processwire-ddev-worktree) — symlink + copy strategy reference
-- [Confluence: Running multiple versions with git worktrees and DDEV](https://dropsolid.atlassian.net/wiki/spaces/CKH/pages/3124166672/)

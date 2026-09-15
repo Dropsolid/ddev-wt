@@ -2,7 +2,7 @@
 #ddev-generated
 ## Description: Pull latest remote changes for one or all worktrees (without leaving current dir)
 ## Usage: wt-pull [name] [--all]
-## Example: "ddev wt-pull" or "ddev wt-pull feature-DS-123" or "ddev wt-pull --all"
+## Example: "ddev wt-pull" or "ddev wt-pull feature-PROJ-123" or "ddev wt-pull --all"
 
 set -euo pipefail
 

@@ -112,7 +112,7 @@ wt() {
                 done
             fi
             # Out of range (e.g. `wt 57` when there's no 57th worktree) → treat as
-            # a partial match below, so it can still match feature-VREEMDEVO-57.
+            # a partial match below, so it can still match feature-PROJ-57.
             ;;
     esac
 

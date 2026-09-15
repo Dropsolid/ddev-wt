@@ -92,7 +92,7 @@ fi
 # Without -f, ddev auth ssh tries EVERY private key in ~/.ssh and prompts for
 # each passphrase; declining one aborts the whole auth step. Set ssh_key in
 # .ddev/worktree.yaml to load only the key this project actually needs:
-#   ssh_key: '~/.ssh/id_rsa_dropsolid'
+#   ssh_key: '~/.ssh/id_rsa_myproject'
 if [[ -z "$LOCAL_DUMP" ]]; then
   header "Checking SSH auth"
   SSH_KEY=$(_wt_yaml_get "${MAIN_WORKTREE}/.ddev/worktree.yaml" ssh_key)
@@ -118,20 +118,25 @@ if [[ -z "$LOCAL_DUMP" ]]; then
   else
     warn "No SSH keys loaded in your agent. The sync may prompt for a passphrase"
     warn "for EVERY key in ~/.ssh. To load only the right key, set in .ddev/worktree.yaml:"
-    echo -e "  ${CYAN}ssh_key: '~/.ssh/id_rsa_dropsolid'${NC}"
+    echo -e "  ${CYAN}ssh_key: '~/.ssh/id_rsa_myproject'${NC}"
     echo ""
     # Still try — user may accept the passphrase prompt or have keyring integration
     ddev auth ssh 2>/dev/null || true
   fi
 fi
 
-# ── Environment variables dump (Dropsolid DXP) ───────────────────────────────
-if [[ -n "$PROJECT_NAME" ]] && [[ -z "$LOCAL_DUMP" ]]; then
-  if ddev drush list 2>/dev/null | grep -q "dxp:env-var:dump"; then
+# ── Environment variables dump ───────────────────────────────────────────────
+# Optional: some hosting platforms ship a Drush command that dumps remote env
+# vars into a local file. Set env_var_dump_command in .ddev/worktree.yaml to
+# the command name to enable this (e.g. 'platform:env-dump'). Left unset by
+# default since most platforms don't have an equivalent.
+ENV_VAR_DUMP_COMMAND=$(_wt_yaml_get "${MAIN_WORKTREE}/.ddev/worktree.yaml" env_var_dump_command)
+if [[ -n "$PROJECT_NAME" ]] && [[ -z "$LOCAL_DUMP" ]] && [[ -n "$ENV_VAR_DUMP_COMMAND" ]]; then
+  if ddev drush list 2>/dev/null | grep -q "$ENV_VAR_DUMP_COMMAND"; then
     header "Dumping environment variables"
     # Pass the command and alias as separate args — quoting them as one string
     # makes ddev/drush treat the whole thing as a single (unknown) command name.
-    ddev drush dxp:env-var:dump "@${PROJECT_NAME}.${ENV}"
+    ddev drush "$ENV_VAR_DUMP_COMMAND" "@${PROJECT_NAME}.${ENV}"
     success "Environment variables dumped."
   fi
 fi

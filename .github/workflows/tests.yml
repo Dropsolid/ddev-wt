@@ -1,0 +1,25 @@
+# Add-on install smoke test. Verify/update this against the current
+# https://github.com/ddev/ddev-addon-template before relying on it -
+# not yet run in CI, just scaffolded from the standard template pattern.
+name: tests
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test add-on install
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install DDEV
+        uses: ddev/github-action-setup-ddev@v1
+
+      - name: Run add-on tests
+        run: bats ./tests/test.bats

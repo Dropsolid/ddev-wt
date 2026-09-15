@@ -146,8 +146,8 @@ _wt_load_config() {
   else
     WORKTREES_DIR_ABS="${_main}/${WORKTREES_DIR}"
   fi
-  # .ddev entries the project regenerates per-environment (e.g. via a pre-start
-  # hook like Dropsolid's ddp). Never symlinked/copied into worktrees.
+  # .ddev entries the project regenerates per-environment (e.g. via a project
+  # pre-start hook/scaffolding tool). Never symlinked/copied into worktrees.
   GENERATED_FILES="$(_wt_yaml_list "${_main}/.ddev/worktree.yaml" generated_ddev_files)"
 }
 
@@ -160,8 +160,8 @@ _wt_is_generated() {
 }
 
 # Generate .ddev/worktree.yaml with a detected project_name.
-# Detection order: git remote URL basename → DDEV config name (stripping ds-/
-# ddev- prefixes) → directory name. Always writes BLOCK-style lists so every
+# Detection order: git remote URL basename → DDEV config name (stripping a
+# ddev- prefix) → directory name. Always writes BLOCK-style lists so every
 # parser in the add-on (including the git hooks) can read the result.
 # Usage: _wt_generate_config <main-worktree-path> <generator-command-name>
 _wt_generate_config() {
@@ -170,7 +170,7 @@ _wt_generate_config() {
   [[ -n "$_remote_url" ]] && _detected=$(basename "$_remote_url" .git)
   if [[ -z "$_detected" ]]; then
     _ddev_name=$(_wt_yaml_get "${_main}/.ddev/config.yaml" name)
-    _detected=$(printf '%s' "$_ddev_name" | sed 's/^ds-//;s/^ddev-//')
+    _detected=$(printf '%s' "$_ddev_name" | sed 's/^ddev-//')
   fi
   [[ -z "$_detected" ]] && _detected=$(basename "$_main")
 
@@ -186,7 +186,7 @@ default_env: 'staging'
 # SSH key wt-sync loads into DDEV's ssh-agent (ddev auth ssh -f <key>).
 # Set this if you have multiple keys in ~/.ssh and get passphrase prompts for
 # unrelated ones. Leave commented to load all keys (DDEV default behavior).
-# ssh_key: '~/.ssh/id_rsa_dropsolid'
+# ssh_key: '~/.ssh/id_rsa_myproject'
 
 # Branches requiring explicit push confirmation (pre-push hook).
 # Entries here EXTEND the built-in defaults (main master develop production staging).
@@ -197,14 +197,19 @@ protected_branches:
   - production
   - staging
 
-# DDEV project name prefix: wt-feature-DS-123.ddev.site
+# DDEV project name prefix: wt-feature-PROJ-123.ddev.site
 worktree_prefix: 'wt'
 
 # Where worktrees are stored (relative to project root, or absolute path)
 worktrees_dir: 'worktrees'
 
+# Optional: Drush command that dumps remote env vars into a local file, if
+# your hosting platform ships one (e.g. 'platform:env-dump'). Runs before the
+# database sync in wt-sync. Leave unset if your platform has no equivalent.
+# env_var_dump_command: ''
+
 # .ddev/ files & dirs your project regenerates per environment (e.g. via a
-# pre-start hook like Dropsolid's 'ddp'). The add-on will NOT symlink/copy these
+# pre-start hook/scaffolding tool). The add-on will NOT symlink/copy these
 # into worktrees — the hook recreates them. Uncomment if your project uses one.
 # generated_ddev_files:
 #   - docker-compose.drupal.yaml
@@ -312,8 +317,8 @@ _wt_apply_ddev_config() {
   mkdir -p "${_wt}/.ddev"
 
   # Unique DDEV project name for this worktree, plus a self-scoped wildcard
-  # hostname so subdomains work the same way main projects' ds-<name> convention
-  # does (additional_hostnames: ["*.ds-<name>"] -> admin.ds-<name>.ddev.site).
+  # hostname so subdomains work the same way they would on a project that
+  # declares its own additional_hostnames: ["*.<name>"] -> admin.<name>.ddev.site.
   # config.yaml is SYMLINKED into every worktree, so any additional_hostnames
   # entry declared there is stuck with the main project's literal name and can
   # never match a worktree's own hostname — the wildcard has to be generated

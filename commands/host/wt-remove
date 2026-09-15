@@ -2,7 +2,7 @@
 #ddev-generated
 ## Description: Safely stop DDEV and remove a git worktree
 ## Usage: wt-remove <path-or-name> [--delete-db]
-## Example: "ddev wt-remove feature-DS-123" or "ddev wt-remove feature/DS-123 --delete-db"
+## Example: "ddev wt-remove feature-PROJ-123" or "ddev wt-remove feature/PROJ-123 --delete-db"
 
 set -euo pipefail
 

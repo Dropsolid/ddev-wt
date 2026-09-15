@@ -2,7 +2,7 @@
 #ddev-generated
 ## Description: Open a worktree in your AI editor, or create one for a new branch
 ## Usage: wt-ai [<branch>] [--from=<base>] [--editor=code|cursor|phpstorm] [--no-composer] [--no-start]
-## Example: "ddev wt-ai" (picker) or "ddev wt-ai feature/DS-123"
+## Example: "ddev wt-ai" (picker) or "ddev wt-ai feature/PROJ-123"
 
 set -euo pipefail
 

@@ -3,9 +3,9 @@
 ## Description: Create a new git worktree with a full DDEV environment
 ## Usage: wt-add <branch> [--from=<base>] [--no-start] [--no-composer]
 ## Usage: wt-add <path> <branch> [--from=<base>] [--no-start] [--no-composer]
-## Example: "ddev wt-add feature/DS-123"
-## Example: "ddev wt-add feature/DS-123 --from=develop"
-## Example: "ddev wt-add /var/www/external-path feature/DS-123"
+## Example: "ddev wt-add feature/PROJ-123"
+## Example: "ddev wt-add feature/PROJ-123 --from=develop"
+## Example: "ddev wt-add /var/www/external-path feature/PROJ-123"
 ## Example: "ddev wt-add ../custom-path origin/epic/feature --no-start"
 
 set -euo pipefail
@@ -53,7 +53,7 @@ BRANCH=""
 EXPLICIT_PATH=false
 
 # Evaluate positional arguments contextually instead of relying strictly on string prefixes:
-# - 2 args: path + branch (e.g., ddev wt-add /var/www/custom feature/DS-123)
+# - 2 args: path + branch (e.g., ddev wt-add /var/www/custom feature/PROJ-123)
 # - 1 arg that looks like a path or existing dir: path only
 # - 1 arg otherwise: branch name (auto-derive path from worktrees_dir)
 if [[ ${#POSITIONAL_ARGS[@]} -eq 2 ]]; then
@@ -89,7 +89,7 @@ _wt_load_config "$MAIN_WORKTREE_ABS"
 # ── Derive directory name and path ────────────────────────────────────────────
 if [[ -z "$WORKTREE_PATH" ]]; then
   # Auto-derive path from branch name inside WORKTREES_DIR
-  # feature/VREEMDEVO-57 → worktrees/feature-VREEMDEVO-57
+  # feature/PROJ-57 → worktrees/feature-PROJ-57
   BRANCH_CLEAN="${BRANCH##origin/}"      # strip remote prefix
   WORKTREE_DIR="${BRANCH_CLEAN//\//-}"   # slashes → dashes
   WORKTREE_PATH="${WORKTREES_DIR_ABS}/${WORKTREE_DIR}"
