@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Open a worktree in your AI editor, or create one for a new branch
+## Usage: wt-ai [<branch>] [--from=<base>] [--editor=code|cursor|phpstorm] [--no-composer] [--no-start]
+## Example: "ddev wt-ai" (picker) or "ddev wt-ai feature/DS-123"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+# ── Find main checkout (works from main or any worktree) ─────────────────────
+MAIN_ROOT=$(_wt_main_worktree "${DDEV_APPROOT}") || MAIN_ROOT="${DDEV_APPROOT}"
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+BRANCH=""
+EDITOR_OVERRIDE=""
+EXTRA_FLAGS=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --editor=*)  EDITOR_OVERRIDE="${arg#--editor=}" ;;
+    --no-composer|--no-start|--from=*) EXTRA_FLAGS+=("$arg") ;;
+    -*)          warn "Unknown flag: $arg" ;;
+    *)           [[ -z "$BRANCH" ]] && BRANCH="$arg" ;;
+  esac
+done
+
+# ── Detect editor ─────────────────────────────────────────────────────────────
+detect_editor() {
+  [[ -n "$EDITOR_OVERRIDE" ]] && echo "$EDITOR_OVERRIDE" && return
+  [[ -n "${WORKTREE_EDITOR:-}" ]] && echo "$WORKTREE_EDITOR" && return
+  for cmd in cursor code phpstorm pstorm windsurf; do
+    command -v "$cmd" &>/dev/null && echo "$cmd" && return
+  done
+  echo ""
+}
+EDITOR_CMD=$(detect_editor)
+
+_open_editor() {
+  local wt_path="$1" branch="$2"
+  header "Opening in AI editor"
+  if [[ -n "$EDITOR_CMD" ]]; then
+    info "Launching: ${EDITOR_CMD} ${wt_path}"
+    "$EDITOR_CMD" "$wt_path" &
+    success "Editor opened. Each worktree in its own window keeps AI agents isolated."
+  else
+    warn "No supported editor found in PATH."
+    warn "Set WORKTREE_EDITOR or install one of: cursor, code, phpstorm, windsurf"
+    echo -e "  ${CYAN}code ${wt_path}${NC}"
+  fi
+  echo ""
+  echo -e "${BOLD}${GREEN}✓ AI worktree ready${NC}"
+  echo -e "  ${BOLD}Path:${NC}   ${CYAN}${wt_path}${NC}"
+  echo -e "  ${BOLD}Branch:${NC} ${branch}"
+  echo ""
+}
+
+_start_if_stopped() {
+  local wt_path="$1"
+  if ! _wt_is_running "$wt_path"; then
+    info "Starting DDEV for $(basename "$wt_path")..."
+    pushd "$wt_path" > /dev/null
+    ddev start
+    popd > /dev/null
+  fi
+}
+
+# ── No-args: picker over existing worktrees ───────────────────────────────────
+if [[ -z "$BRANCH" ]]; then
+  WORKTREE_PATHS=()
+  while IFS= read -r p; do
+    [[ -d "${p}/.git" ]] && continue  # exclude main
+    WORKTREE_PATHS+=("$p")
+  done < <(_wt_worktree_paths "${MAIN_ROOT}")
+
+  if [[ ${#WORKTREE_PATHS[@]} -eq 0 ]]; then
+    error "No worktrees found. Create one with: ddev wt-add <branch>"
+  fi
+
+  SELECTED=""
+  if command -v fzf &>/dev/null; then
+    # Hidden first field = path, so selection maps back unambiguously even if
+    # two worktrees share a display name.
+    TAB=$(printf '\t')
+    SELECTED=$(for p in "${WORKTREE_PATHS[@]}"; do
+      b=$(git -C "$p" branch --show-current 2>/dev/null || echo "detached")
+      printf '%s\t%s\t%s\n' "$p" "$(basename "$p")" "$b"
+    done | fzf --prompt='Open in AI editor > ' --height=40% --reverse \
+               --with-nth=2,3 --delimiter='\t' | cut -f1)
+  else
+    echo ""
+    echo -e "${BOLD}Select a worktree to open in AI editor:${NC}"
+    echo ""
+    for i in "${!WORKTREE_PATHS[@]}"; do
+      b=$(git -C "${WORKTREE_PATHS[$i]}" branch --show-current 2>/dev/null || echo "detached")
+      echo -e "  ${CYAN}$((i+1))${NC}  $(basename "${WORKTREE_PATHS[$i]}")  ${DIM}(${b})${NC}"
+    done
+    echo ""
+    read -r -p "Enter number [1-${#WORKTREE_PATHS[@]}]: " NUM
+    if [[ "$NUM" =~ ^[0-9]+$ ]] && (( NUM >= 1 && NUM <= ${#WORKTREE_PATHS[@]} )); then
+      SELECTED="${WORKTREE_PATHS[$((NUM-1))]}"
+    else
+      error "Invalid selection."
+    fi
+  fi
+
+  [[ -z "$SELECTED" ]] && exit 0  # fzf cancelled
+
+  WT_BRANCH=$(git -C "$SELECTED" branch --show-current 2>/dev/null || echo "detached")
+  _start_if_stopped "$SELECTED"
+  _open_editor "$SELECTED" "$WT_BRANCH"
+  exit 0
+fi
+
+# ── Branch given: nesting guard (creating requires main checkout) ─────────────
+if [[ ! -d "${DDEV_APPROOT}/.git" ]]; then
+  error "Creating a new worktree requires the main checkout. Run from: ${MAIN_ROOT}"
+fi
+
+# ── Resolve expected worktree path ───────────────────────────────────────────
+_wt_load_config "$MAIN_ROOT"
+BRANCH_CLEAN="${BRANCH#origin/}"
+BRANCH_CLEAN="${BRANCH_CLEAN#refs/heads/}"
+WORKTREE_DIR="${BRANCH_CLEAN//\//-}"
+WORKTREE_PATH="${WORKTREES_DIR_ABS}/${WORKTREE_DIR}"
+LOCAL_BRANCH="${BRANCH_CLEAN}"
+
+# ── Create or reuse the worktree ─────────────────────────────────────────────
+ADDON_ADD="${MAIN_ROOT}/.ddev/commands/host/wt-add"
+[[ ! -f "$ADDON_ADD" ]] && error "wt-add not found. Reinstall the add-on."
+
+if [[ -d "$WORKTREE_PATH" ]]; then
+  info "Worktree already exists — opening without recreating."
+  _start_if_stopped "$WORKTREE_PATH"
+else
+  bash "$ADDON_ADD" "$BRANCH" "${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}"
+  [[ ! -d "$WORKTREE_PATH" ]] && error "Worktree directory not found at: ${WORKTREE_PATH}"
+fi
+
+_open_editor "$WORKTREE_PATH" "$LOCAL_BRANCH"
+echo -e "  ${DIM}Sync DB when ready:  ${CYAN}cd ${WORKTREE_PATH} && ddev wt-sync${NC}"
+echo ""

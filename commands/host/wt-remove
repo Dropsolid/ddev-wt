@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Safely stop DDEV and remove a git worktree
+## Usage: wt-remove <path-or-name> [--delete-db]
+## Example: "ddev wt-remove feature-DS-123" or "ddev wt-remove feature/DS-123 --delete-db"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+TARGET=""
+DELETE_DB=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --delete-db) DELETE_DB=true ;;
+    -*) warn "Unknown flag: $arg" ;;
+    *) [[ -z "$TARGET" ]] && TARGET="$arg" ;;
+  esac
+done
+
+[[ -z "$TARGET" ]] && error "Usage: ddev wt-remove <path-or-name> [--delete-db]"
+
+MAIN_WORKTREE=$(_wt_main_worktree) \
+  || error "Not in a git repository, or no main checkout found (bare-repo layouts are not supported)."
+_wt_load_config "$MAIN_WORKTREE"
+
+# Resolve to a REGISTERED worktree only. This is what makes the rm -rf
+# fallback below safe: an arbitrary directory that merely shares a name can
+# never be selected for deletion.
+WORKTREE_ABS=$(_wt_resolve_worktree "$TARGET" "$WORKTREES_DIR_ABS") \
+  || error "Could not find a registered worktree matching: ${TARGET}
+  Run 'ddev wt-list' to see all worktrees."
+
+[[ ! -d "$WORKTREE_ABS" ]] && error "Worktree directory does not exist: ${WORKTREE_ABS}
+  Clean up the stale registration with: git worktree prune"
+
+# Safety: refuse to remove the main worktree
+if [[ -d "${WORKTREE_ABS}/.git" ]]; then
+  error "Refusing to remove the main worktree (where .git is a directory)."
+fi
+
+WORKTREE_NAME=$(basename "$WORKTREE_ABS")
+BRANCH=$(git -C "$WORKTREE_ABS" branch --show-current 2>/dev/null || echo "detached")
+
+# Check for uncommitted changes and unpushed work
+DIRTY=$(git -C "$WORKTREE_ABS" status --porcelain 2>/dev/null)
+HAS_UPSTREAM=false
+UNPUSHED=0
+if git -C "$WORKTREE_ABS" rev-parse --abbrev-ref "@{u}" &>/dev/null; then
+  HAS_UPSTREAM=true
+  UNPUSHED=$(git -C "$WORKTREE_ABS" rev-list --count "@{u}.." 2>/dev/null || echo 0)
+fi
+
+echo ""
+echo -e "${BOLD}Removing worktree: ${RED}${WORKTREE_NAME}${NC}"
+echo -e "  Path   : ${WORKTREE_ABS}"
+echo -e "  Branch : ${BRANCH}"
+
+if [[ -n "$DIRTY" ]]; then
+  echo ""
+  echo -e "  ${YELLOW}⚠  Uncommitted changes detected — these WILL be lost:${NC}"
+  git -C "$WORKTREE_ABS" status --short | head -10 | sed 's/^/     /'
+fi
+
+if [[ "$UNPUSHED" -gt 0 ]]; then
+  echo ""
+  echo -e "  ${YELLOW}⚠  ${UNPUSHED} unpushed commit(s) on '${BRANCH}'.${NC}"
+  echo -e "  ${DIM}   The local branch itself is kept — commits stay reachable via 'git checkout ${BRANCH}'.${NC}"
+elif [[ "$HAS_UPSTREAM" == "false" ]] && [[ "$BRANCH" != "detached" ]]; then
+  echo ""
+  echo -e "  ${YELLOW}⚠  Branch '${BRANCH}' has never been pushed.${NC}"
+  echo -e "  ${DIM}   The local branch itself is kept — only uncommitted changes are lost.${NC}"
+fi
+
+echo ""
+echo -e "${RED}This cannot be undone.${NC} All uncommitted changes in this worktree will be lost."
+echo ""
+read -r -p "Type the worktree name to confirm removal [${WORKTREE_NAME}]: " CONFIRM
+
+if [[ "$CONFIRM" != "$WORKTREE_NAME" ]]; then
+  echo -e "${YELLOW}Aborted.${NC}"
+  exit 0
+fi
+
+# ── Fix read-only permissions then stop DDEV ─────────────────────────────────
+header "Stopping DDEV"
+DDEV_NAME=$(_wt_yaml_get "${WORKTREE_ABS}/.ddev/config.local.yaml" name)
+
+if [[ -n "$DDEV_NAME" ]] && ddev describe "$DDEV_NAME" &>/dev/null; then
+  # Fix permissions while the container is still running — this is the reliable
+  # path for root-owned files (drush/, settings.php 444, sites/default 555).
+  # ddev exec has root/sudo access regardless of host file ownership.
+  info "Resetting read-only files from inside container..."
+  pushd "$WORKTREE_ABS" > /dev/null
+  ddev exec sudo chmod -R a+w /var/www/html 2>/dev/null || true
+  popd > /dev/null
+  ddev stop --unlist "$DDEV_NAME" 2>/dev/null || ddev stop 2>/dev/null || true
+  success "DDEV stopped."
+else
+  info "DDEV not running — will fix permissions on host."
+fi
+
+# ── Optionally delete DDEV database ─────────────────────────────────────────
+if [[ "$DELETE_DB" == "true" ]] && [[ -n "$DDEV_NAME" ]]; then
+  header "Deleting DDEV data"
+  # Use the DDEV project name (wt-<dir>), not the bare directory name —
+  # they differ, and deleting by the wrong name silently leaves the DB volume orphaned.
+  ddev delete "$DDEV_NAME" --omit-snapshot -y 2>/dev/null || true
+  success "DDEV project data deleted."
+fi
+
+# ── Remove the worktree ──────────────────────────────────────────────────────
+header "Removing git worktree"
+
+# Unlock any remaining read-only files (Drupal 444/555 on settings.php, sites/default).
+# Prefer user-level chmod; fall back to sudo for root-owned files (created by Docker
+# when the container user didn't map to the host UID).
+info "Resetting read-only permissions before removal..."
+if ! chmod -R u+w "$WORKTREE_ABS" 2>/dev/null; then
+  warn "Some files are root-owned — using sudo to unlock them."
+  sudo chmod -R a+w "$WORKTREE_ABS" 2>/dev/null || true
+fi
+
+if ! git -C "$MAIN_WORKTREE" worktree remove "$WORKTREE_ABS" --force 2>/dev/null; then
+  # Fallback: git worktree remove can fail if the directory was partially cleaned
+  # up already (e.g. ddev delete removed some files). Safe because WORKTREE_ABS
+  # was resolved against the registered worktree list above.
+  warn "git worktree remove failed — removing directory manually."
+  rm -rf "$WORKTREE_ABS" || sudo rm -rf "$WORKTREE_ABS"
+fi
+git -C "$MAIN_WORKTREE" worktree prune
+success "Worktree removed."
+success "Stale worktree refs pruned."
+
+echo ""
+echo -e "${GREEN}${BOLD}✓ Done.${NC} Worktree ${WORKTREE_NAME} has been removed."
+echo ""

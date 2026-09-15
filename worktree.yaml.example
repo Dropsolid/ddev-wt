@@ -1,0 +1,40 @@
+# ddev-worktree project configuration
+# Place this file at .ddev/worktree.yaml (it is gitignored).
+
+# Drush alias prefix — used for sql:sync, e.g. @myproject.staging
+project_name: 'myproject'
+
+# Default remote environment to sync from
+default_env: 'staging'
+
+# SSH key wt-sync loads into DDEV's ssh-agent (ddev auth ssh -f <key>).
+# Set this if you have multiple keys in ~/.ssh and get passphrase prompts for
+# unrelated ones. Leave commented to load all keys (DDEV default behavior).
+# ssh_key: '~/.ssh/id_rsa_dropsolid'
+
+# Branches that require typing the branch name to push.
+# Entries here EXTEND the built-in defaults (main master develop production staging).
+protected_branches:
+  - main
+  - master
+  - develop
+  - production
+  - staging
+
+# DDEV project name prefix for worktrees (default: 'wt')
+# Result: wt-feature-DS-123.ddev.site
+worktree_prefix: 'wt'
+
+# Directory where worktrees are stored (relative to project root, or absolute path).
+# Default: worktrees (inside the project, gitignored automatically)
+# Change to an absolute path like /home/user/worktrees to store outside the project.
+worktrees_dir: 'worktrees'
+
+# .ddev/ files & dirs your project REGENERATES per environment (e.g. via a
+# pre-start hook like Dropsolid's `ddp`). The add-on will NOT symlink or copy
+# these into worktrees — the hook recreates them there. Symlinking a file the
+# hook wants to overwrite causes errors; skipping it lets the hook own it.
+# Leave empty/omit for projects without such a generator.
+# generated_ddev_files:
+#   - docker-compose.drupal.yaml
+#   - drupal

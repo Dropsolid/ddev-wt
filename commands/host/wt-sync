@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Sync local environment from a remote (composer install + DB sync + deploy)
+## Usage: wt-sync [--env=staging] [--local-dump=~/path/to/db.sql]
+## Example: "ddev wt-sync" or "ddev wt-sync --env=dev" or "ddev wt-sync --local-dump=~/dumps/myproject.sql"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+# Parse arguments
+ENV=""
+LOCAL_DUMP=""
+
+for arg in "$@"; do
+  case "$arg" in
+    --env=*)        ENV="${arg#--env=}" ;;
+    --local-dump=*) LOCAL_DUMP="${arg#--local-dump=}" ;;
+    -h|--help)
+      echo "Usage: ddev wt-sync [--env=staging] [--local-dump=~/path/to/db.sql]"
+      exit 0 ;;
+    *) warn "Unknown argument: $arg" ;;
+  esac
+done
+
+# ── Resolve main worktree path ───────────────────────────────────────────────
+# Find the main checkout (the one where .git is a directory, not a file) so we
+# read the project's worktree.yaml — and its possibly-customised project_name —
+# rather than the current worktree's, which may have none. --show-toplevel would
+# return the *worktree* root and silently regenerate config from the git remote.
+MAIN_WORKTREE=$(_wt_main_worktree) || MAIN_WORKTREE=""
+[[ -z "$MAIN_WORKTREE" ]] && MAIN_WORKTREE=$(git rev-parse --show-toplevel 2>/dev/null || echo "${DDEV_APPROOT}")
+
+# ── Auto-generate .ddev/worktree.yaml if missing ──────────────────────────────
+# Sync reads project_name for Drush aliases — create the file if absent.
+if [[ ! -f "${MAIN_WORKTREE}/.ddev/worktree.yaml" ]]; then
+  _wt_generate_config "$MAIN_WORKTREE" "wt-sync"
+fi
+
+# Read project config; --env beats default_env from config, which beats 'staging'.
+PROJECT_NAME=$(_wt_yaml_get "${MAIN_WORKTREE}/.ddev/worktree.yaml" project_name)
+if [[ -z "$ENV" ]]; then
+  ENV=$(_wt_yaml_get "${MAIN_WORKTREE}/.ddev/worktree.yaml" default_env)
+fi
+[[ -z "$ENV" ]] && ENV="staging"
+
+CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+WORKTREE_NAME=$(basename "$PWD")
+
+echo ""
+echo -e "${BOLD}Syncing worktree: ${CYAN}${WORKTREE_NAME}${NC}"
+echo -e "  Branch  : ${CURRENT_BRANCH}"
+echo -e "  Source  : ${LOCAL_DUMP:-(remote @${PROJECT_NAME}.${ENV})}"
+echo ""
+
+# ── Install dependencies ─────────────────────────────────────────────────────
+header "Installing dependencies"
+
+COMPOSER_RAN=false
+if _wt_needs_composer "$PWD"; then
+  [[ ! -f "vendor/autoload.php" ]] \
+    && info "vendor/ missing — running composer install..." \
+    || info "composer.lock is newer than vendor/ — running composer install..."
+
+  _wt_unlock_sites_default "$PWD"
+  ddev composer install
+  COMPOSER_RAN=true
+else
+  info "vendor/ is up to date — skipping composer install."
+fi
+
+if [[ "$COMPOSER_RAN" == "true" ]]; then
+  ddev restart
+  success "Composer install + restart done."
+fi
+
+# ── SSH Auth ─────────────────────────────────────────────────────────────────
+# ddev auth ssh loads keys into DDEV's shared ssh-agent container so drush can
+# reach the remote. It is idempotent, and the agent container is shared across
+# ALL DDEV projects — a key loaded once stays available until Docker restarts.
+#
+# Without -f, ddev auth ssh tries EVERY private key in ~/.ssh and prompts for
+# each passphrase; declining one aborts the whole auth step. Set ssh_key in
+# .ddev/worktree.yaml to load only the key this project actually needs:
+#   ssh_key: '~/.ssh/id_rsa_dropsolid'
+if [[ -z "$LOCAL_DUMP" ]]; then
+  header "Checking SSH auth"
+  SSH_KEY=$(_wt_yaml_get "${MAIN_WORKTREE}/.ddev/worktree.yaml" ssh_key)
+  if [[ -n "$SSH_KEY" ]]; then
+    SSH_KEY_EXPANDED="${SSH_KEY/#\~/$HOME}"
+    if [[ -f "$SSH_KEY_EXPANDED" ]]; then
+      info "Loading configured SSH key: ${SSH_KEY}"
+      # No stderr redirect — a passphrase prompt for THIS key is expected.
+      if ddev auth ssh -f "$SSH_KEY_EXPANDED"; then
+        success "SSH key available in container."
+      else
+        warn "Could not load ${SSH_KEY} — the sync may fail to reach the remote."
+      fi
+    else
+      warn "Configured ssh_key not found: ${SSH_KEY_EXPANDED}"
+      warn "Fix the ssh_key path in .ddev/worktree.yaml — falling back to all keys."
+      ddev auth ssh 2>/dev/null || true
+    fi
+  elif ssh-add -l &>/dev/null; then
+    # Keys are loaded in the host agent — forward them to the container silently
+    ddev auth ssh 2>/dev/null || true
+    success "SSH auth forwarded to container."
+  else
+    warn "No SSH keys loaded in your agent. The sync may prompt for a passphrase"
+    warn "for EVERY key in ~/.ssh. To load only the right key, set in .ddev/worktree.yaml:"
+    echo -e "  ${CYAN}ssh_key: '~/.ssh/id_rsa_dropsolid'${NC}"
+    echo ""
+    # Still try — user may accept the passphrase prompt or have keyring integration
+    ddev auth ssh 2>/dev/null || true
+  fi
+fi
+
+# ── Environment variables dump (Dropsolid DXP) ───────────────────────────────
+if [[ -n "$PROJECT_NAME" ]] && [[ -z "$LOCAL_DUMP" ]]; then
+  if ddev drush list 2>/dev/null | grep -q "dxp:env-var:dump"; then
+    header "Dumping environment variables"
+    # Pass the command and alias as separate args — quoting them as one string
+    # makes ddev/drush treat the whole thing as a single (unknown) command name.
+    ddev drush dxp:env-var:dump "@${PROJECT_NAME}.${ENV}"
+    success "Environment variables dumped."
+  fi
+fi
+
+# ── Database sync ────────────────────────────────────────────────────────────
+header "Syncing database"
+
+if [[ -n "$LOCAL_DUMP" ]]; then
+  LOCAL_DUMP_EXPANDED="${LOCAL_DUMP/#\~/$HOME}"
+  [[ ! -f "$LOCAL_DUMP_EXPANDED" ]] && error "Dump file not found: ${LOCAL_DUMP_EXPANDED}"
+  info "Importing local dump: ${LOCAL_DUMP_EXPANDED}"
+  ddev import-db --file="$LOCAL_DUMP_EXPANDED"
+  success "Local dump imported."
+elif [[ -n "$PROJECT_NAME" ]]; then
+  info "Syncing from @${PROJECT_NAME}.${ENV}..."
+  # Pass each argument separately — wrapping everything in one quoted string
+  # causes ddev drush to treat the entire thing as a single command name,
+  # which Drush can't find and reports as "command not found".
+  ddev drush sql:sync "@${PROJECT_NAME}.${ENV}" @self -y
+  success "Database synced from ${ENV}."
+else
+  warn "No project_name configured and no --local-dump provided. Skipping database sync."
+  warn "Either set project_name in .ddev/worktree.yaml or use --local-dump=<path>."
+fi
+
+# ── Deploy ───────────────────────────────────────────────────────────────────
+header "Running deploy"
+# ddev drush list output indents commands with spaces: "  deploy  (description)"
+# grep -q "^deploy " would never match. Use drush help instead — exit 0 = exists.
+if ddev drush help deploy &>/dev/null; then
+  ddev drush deploy -y
+  success "Deploy complete."
+elif ddev drush help updatedb &>/dev/null; then
+  ddev drush updatedb -y
+  ddev drush cache:rebuild
+  success "Update + cache rebuild complete."
+else
+  warn "No deploy command found. Skipping."
+fi
+
+# Resolve the primary URL for the closing message. Prefer jq, then a portable
+# grep/sed extraction; fall back to the conventional <name>.ddev.site host.
+_primary_url() {
+  local _j; _j=$(ddev describe -j 2>/dev/null) || return 0
+  if command -v jq &>/dev/null; then
+    printf '%s' "$_j" | jq -r '.raw.primary_url // empty' 2>/dev/null || true
+  else
+    printf '%s' "$_j" | tr ',{}' '\n' \
+      | sed -n 's/.*"primary_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+  fi
+}
+PRIMARY_URL=$(_primary_url)
+PRIMARY_URL="${PRIMARY_URL#https://}"; PRIMARY_URL="${PRIMARY_URL#http://}"
+[[ -z "$PRIMARY_URL" ]] && PRIMARY_URL="${WORKTREE_NAME}.ddev.site"
+
+echo ""
+echo -e "${GREEN}${BOLD}✓ Sync complete.${NC}"
+echo -e "  ${BLUE}https://${PRIMARY_URL}${NC}"
+echo ""

@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Re-apply DDEV config to one or all existing worktrees (symlinks, docker-compose, volume dirs)
+## Usage: wt-repair [path-or-name] [--all] [--restart]
+## Example: "ddev wt-repair" or "ddev wt-repair feature/BBW-104" or "ddev wt-repair --all --restart"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+# ── Parse arguments ───────────────────────────────────────────────────────────
+TARGET=""
+REPAIR_ALL=false
+DO_RESTART=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --all)     REPAIR_ALL=true ;;
+    --restart) DO_RESTART=true ;;
+    -*)        warn "Unknown flag: $arg" ;;
+    *)         [[ -z "$TARGET" ]] && TARGET="$arg" ;;
+  esac
+done
+
+MAIN_WORKTREE=$(_wt_main_worktree) \
+  || error "Not in a git repository, or no main checkout found (bare-repo layouts are not supported)."
+
+_wt_load_config "$MAIN_WORKTREE"
+
+# ── Core repair function ──────────────────────────────────────────────────────
+repair_worktree() {
+  local wt_path="$1"
+  local wt_name
+  wt_name=$(basename "$wt_path")
+
+  echo ""
+  echo -e "${BOLD}Repairing: ${CYAN}${wt_name}${NC}  ${DIM}(${wt_path})${NC}"
+
+  # Safety: refuse to "repair" the main worktree
+  if [[ -d "${wt_path}/.git" ]]; then
+    warn "Skipping main worktree — only non-main worktrees need repair."
+    return 0
+  fi
+
+  [[ ! -d "$wt_path" ]] && { warn "Directory not found: ${wt_path}"; return 1; }
+
+  # ── Stop DDEV first ───────────────────────────────────────────────────────
+  # Docker containers run as root and create root-owned files in .ddev/
+  # (e.g. solr/, varnish/ volume mounts). We must stop before touching files.
+  local was_running=false
+  local ddev_name
+  ddev_name=$(_wt_yaml_get "${wt_path}/.ddev/config.local.yaml" name)
+  if [[ -n "$ddev_name" ]] && [[ "$(_wt_ddev_status_by_name "$ddev_name")" == "running" ]]; then
+    info "Stopping DDEV (Docker creates root-owned files that block copy)..."
+    pushd "$wt_path" > /dev/null
+    ddev stop 2>/dev/null || true
+    popd > /dev/null
+    was_running=true
+  fi
+
+  # ── Apply the shared .ddev setup (symlinks, compose files, volume dirs, commands)
+  _wt_apply_ddev_config "$MAIN_WORKTREE" "$wt_path"
+
+  local final_name
+  final_name=$(_wt_yaml_get "${wt_path}/.ddev/config.local.yaml" name)
+  [[ -z "$final_name" ]] && final_name="$wt_name"
+
+  if [[ $WT_CHANGED -gt 0 ]]; then
+    success "${WT_CHANGED} change(s) applied."
+  else
+    success "Already up to date — nothing to change."
+  fi
+
+  # Restart if: --restart flag given, OR DDEV was running and we stopped it
+  local ddev_restarted=false
+  if [[ "$DO_RESTART" == "true" ]] || [[ "$was_running" == "true" ]]; then
+    info "Restarting DDEV..."
+    pushd "$wt_path" > /dev/null
+    ddev restart
+    popd > /dev/null
+    success "DDEV restarted  →  https://${final_name}.ddev.site"
+    ddev_restarted=true
+  elif [[ $WT_CHANGED -gt 0 ]]; then
+    warn "Run 'ddev restart' in ${wt_path} to apply the changes."
+    echo -e "  ${DIM}Or re-run with --restart to do it automatically.${NC}"
+  fi
+
+  # ── Composer install if vendor/ is missing or stale ──────────────────────────
+  if [[ "$ddev_restarted" == "true" ]] && _wt_needs_composer "$wt_path"; then
+    header "Installing Composer dependencies"
+    _wt_unlock_sites_default "$wt_path"
+    pushd "$wt_path" > /dev/null
+    ddev composer install
+    popd > /dev/null
+    success "Composer install complete."
+  fi
+}
+
+# ── Resolve which worktrees to repair ─────────────────────────────────────────
+if [[ "$REPAIR_ALL" == "true" ]]; then
+  # Collect all non-main worktree paths
+  TARGETS=()
+  while IFS= read -r wt; do
+    [[ -d "${wt}/.git" ]] && continue  # skip main
+    TARGETS+=("$wt")
+  done < <(_wt_worktree_paths)
+
+  if [[ ${#TARGETS[@]} -eq 0 ]]; then
+    echo -e "\n  ${DIM}No non-main worktrees found.${NC}\n"
+    exit 0
+  fi
+
+  echo ""
+  echo -e "${BOLD}Repairing ${#TARGETS[@]} worktree(s)${NC}"
+
+  for wt in "${TARGETS[@]}"; do
+    repair_worktree "$wt"
+  done
+
+elif [[ -n "$TARGET" ]]; then
+  FOUND=$(_wt_resolve_worktree "$TARGET" "$WORKTREES_DIR_ABS") \
+    || error "Cannot find a registered worktree matching: ${TARGET}"
+  repair_worktree "$FOUND"
+
+else
+  # Default: if we're currently inside a worktree, repair it.
+  # If we're in the main worktree, point at --all.
+  if [[ -f "${PWD}/.git" ]]; then
+    repair_worktree "$PWD"
+  else
+    echo ""
+    echo -e "  ${DIM}You are in the main worktree. Run with --all to repair all worktrees,${NC}"
+    echo -e "  ${DIM}or specify a worktree name/path.${NC}"
+    echo ""
+    echo -e "  ${CYAN}ddev wt-repair --all${NC}"
+    echo -e "  ${CYAN}ddev wt-repair feature/BBW-104${NC}"
+    echo ""
+    exit 0
+  fi
+fi
+
+echo ""

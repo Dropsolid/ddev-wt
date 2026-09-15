@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Install git safety hooks (pre-commit, pre-push) into the main worktree's .git/hooks/
+## Usage: wt-hooks-install [--force]
+## Example: "ddev wt-hooks-install" or "ddev wt-hooks-install --force"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+FORCE=false
+for arg in "$@"; do
+  [[ "$arg" == "--force" ]] && FORCE=true
+done
+
+MAIN_WORKTREE=$(_wt_main_worktree) \
+  || error "Not in a git repository, or no main checkout found (bare-repo layouts are not supported)."
+
+HOOKS_DIR="${MAIN_WORKTREE}/.git/hooks"
+ADDON_HOOKS="${MAIN_WORKTREE}/.ddev/worktree-hooks"
+
+[[ ! -d "$ADDON_HOOKS" ]] && error "Hook templates not found at: ${ADDON_HOOKS}. Reinstall the add-on."
+
+echo ""
+echo -e "${BOLD}Installing git safety hooks${NC}"
+echo -e "  Target: ${HOOKS_DIR}"
+echo ""
+
+installed=0
+skipped=0
+
+for hook in pre-commit pre-push; do
+  src="${ADDON_HOOKS}/${hook}"
+  dst="${HOOKS_DIR}/${hook}"
+
+  if [[ ! -f "$src" ]]; then
+    warn "Hook template not found: ${src}"
+    continue
+  fi
+
+  if [[ -f "$dst" ]] && [[ "$FORCE" == "false" ]]; then
+    # Check if it's already our hook
+    if grep -q "ddev-worktree" "$dst" 2>/dev/null; then
+      info "Hook already installed: ${hook}"
+      ((skipped++)) || true
+    else
+      warn "Existing ${hook} hook found (not from ddev-worktree). Use --force to overwrite."
+      ((skipped++)) || true
+    fi
+    continue
+  fi
+
+  if [[ -f "$dst" ]] && [[ "$FORCE" == "true" ]]; then
+    # Back up existing hook
+    cp "$dst" "${dst}.bak"
+    info "Backed up existing ${hook} to ${hook}.bak"
+  fi
+
+  cp "$src" "$dst"
+  chmod +x "$dst"
+  success "Installed: ${hook}"
+  ((installed++)) || true
+done
+
+echo ""
+if [[ $installed -gt 0 ]]; then
+  echo -e "${GREEN}${BOLD}✓ ${installed} hook(s) installed.${NC}"
+  echo -e "  These hooks apply to all worktrees (git hooks are shared)."
+else
+  echo -e "${YELLOW}  No new hooks installed (${skipped} already present).${NC}"
+  echo -e "  Use --force to overwrite existing hooks."
+fi
+echo ""

@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Show git + DDEV status across all worktrees at a glance
+## Usage: wt-status [--limit=N]
+## Example: "ddev wt-status" or "ddev wt-status --limit=5"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+# Parse arguments
+LIMIT=""
+for arg in "$@"; do
+  case "$arg" in
+    --limit=*)
+      LIMIT="${arg#--limit=}"
+      [[ "$LIMIT" =~ ^[0-9]+$ ]] || error "--limit expects a number, got: ${LIMIT}"
+      ;;
+    -h|--help)
+      echo "Usage: ddev wt-status [--limit=N]"
+      echo "Show git + DDEV status across all worktrees"
+      echo ""
+      echo "Options:"
+      echo "  --limit=N    Show only first N worktrees"
+      exit 0 ;;
+  esac
+done
+
+WT_RAW=$(git worktree list --porcelain 2>/dev/null) || {
+  echo "Not in a git repository." >&2; exit 1
+}
+
+# Collect DDEV status (cached TSV, jq → python3 → empty fallback)
+_wt_ddev_data_load
+
+# Parse worktrees
+declare -a PATHS BRANCHES
+_path=""; _branch=""
+while IFS= read -r line; do
+  if [[ "$line" == worktree\ * ]]; then
+    [[ -n "$_path" ]] && { PATHS+=("$_path"); BRANCHES+=("$_branch"); }
+    _path="${line#worktree }"; _branch=""
+  elif [[ "$line" == branch\ * ]]; then
+    _branch="${line#branch }"; _branch="${_branch#refs/heads/}"
+  elif [[ "$line" == HEAD\ * ]] && [[ -z "$_branch" ]]; then
+    _branch="${line#HEAD }"; _branch="${_branch:0:8} (detached)"
+  fi
+done <<< "$WT_RAW"
+[[ -n "$_path" ]] && { PATHS+=("$_path"); BRANCHES+=("$_branch"); }
+
+echo ""
+echo -e "${BOLD}  Worktree Status${NC}"
+echo ""
+
+ISSUES=0
+COUNT=0
+
+for i in "${!PATHS[@]}"; do
+  # Apply limit if specified
+  if [[ -n "$LIMIT" ]] && [[ $COUNT -ge $LIMIT ]]; then
+    break
+  fi
+  ((COUNT++)) || true
+  path="${PATHS[$i]}"
+  branch="${BRANCHES[$i]:-unknown}"
+  name=$(basename "$path")
+  is_main=false; [[ -d "${path}/.git" ]] && is_main=true
+
+  # Git checks
+  dirty=$(git -C "$path" status --porcelain 2>/dev/null | wc -l | xargs)
+  unpushed=$(git -C "$path" rev-list --count @{u}.. 2>/dev/null || echo 0)
+  unstaged=$(git -C "$path" diff --name-only 2>/dev/null | wc -l | xargs)
+  staged=$(git -C "$path" diff --cached --name-only 2>/dev/null | wc -l | xargs)
+
+  # DDEV check
+  ddev_status="$(_wt_ddev_status_for_path "$path")"; [[ -z "$ddev_status" ]] && ddev_status="stopped"
+
+  # Header line
+  if $is_main; then
+    echo -e "  ${BOLD}${CYAN}${name}${NC}  ${DIM}(main)${NC}  ${DIM}⎇ ${branch}${NC}"
+  else
+    echo -e "  ${BOLD}${name}${NC}  ${DIM}⎇ ${branch}${NC}"
+  fi
+
+  # DDEV status
+  if [[ "$ddev_status" == "running" ]]; then
+    echo -e "    ${GREEN}● DDEV running${NC}  ${DIM}$(_wt_ddev_url_for_path "$path")${NC}"
+  else
+    echo -e "    ${DIM}○ DDEV ${ddev_status}${NC}"
+  fi
+
+  # Git status — only show if there's something to report
+  if [[ "$dirty" -gt 0 ]]; then
+    echo -e "    ${YELLOW}⚡ ${staged} staged, ${unstaged} unstaged (${dirty} total dirty)${NC}"
+    ((ISSUES++)) || true
+  else
+    echo -e "    ${GREEN}✓ Working tree clean${NC}"
+  fi
+
+  if [[ "$unpushed" -gt 0 ]]; then
+    echo -e "    ${BLUE}↑ ${unpushed} unpushed commit(s)${NC}"
+    ((ISSUES++)) || true
+    # Show the commits
+    git -C "$path" log --oneline "@{u}.." 2>/dev/null \
+      | head -5 | sed "s/^/      ${DIM}/" || true
+    echo -ne "${NC}"
+  fi
+
+  echo ""
+done
+
+if [[ -n "$LIMIT" ]] && [[ ${#PATHS[@]} -gt $LIMIT ]]; then
+  echo -e "  ${DIM}Showing first ${LIMIT} of ${#PATHS[@]} worktrees. Use --limit=N to adjust.${NC}\n"
+fi
+
+if [[ $ISSUES -eq 0 ]]; then
+  echo -e "  ${GREEN}${BOLD}All clean.${NC}  No uncommitted changes or unpushed commits.\n"
+else
+  echo -e "  ${YELLOW}${ISSUES} worktree(s) need attention.${NC}\n"
+fi

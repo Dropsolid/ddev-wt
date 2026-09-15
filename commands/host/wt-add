@@ -1,0 +1,355 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Create a new git worktree with a full DDEV environment
+## Usage: wt-add <branch> [--from=<base>] [--no-start] [--no-composer]
+## Usage: wt-add <path> <branch> [--from=<base>] [--no-start] [--no-composer]
+## Example: "ddev wt-add feature/DS-123"
+## Example: "ddev wt-add feature/DS-123 --from=develop"
+## Example: "ddev wt-add /var/www/external-path feature/DS-123"
+## Example: "ddev wt-add ../custom-path origin/epic/feature --no-start"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+# The command may be executed via a symlink from a worktree's .ddev — follow it
+# back to the main checkout where worktree-lib/ lives.
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+# Must be run from the main worktree (.git is a directory, not a file).
+# In any git worktree, .git is a FILE pointing back to the main repo.
+# Check DDEV_APPROOT, not PWD: if invoked from a subdirectory (e.g. worktrees/)
+# PWD has no .git at all and would falsely trigger this guard.
+if [[ ! -d "${DDEV_APPROOT}/.git" ]]; then
+  error "Nesting not allowed. Run ddev wt-add from the main checkout only (where .git is a directory)."
+fi
+
+# ── Parse arguments ───────────────────────────────────────────────────────────
+NO_START=false
+NO_COMPOSER=false
+FROM_BASE=""
+POSITIONAL_ARGS=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --no-start)    NO_START=true ;;
+    --no-composer) NO_COMPOSER=true ;;
+    --from=*)      FROM_BASE="${arg#--from=}" ;;
+    -*)            warn "Unknown flag: $arg" ;;
+    *)             POSITIONAL_ARGS+=("$arg") ;;
+  esac
+done
+
+WORKTREE_PATH=""
+BRANCH=""
+EXPLICIT_PATH=false
+
+# Evaluate positional arguments contextually instead of relying strictly on string prefixes:
+# - 2 args: path + branch (e.g., ddev wt-add /var/www/custom feature/DS-123)
+# - 1 arg that looks like a path or existing dir: path only
+# - 1 arg otherwise: branch name (auto-derive path from worktrees_dir)
+if [[ ${#POSITIONAL_ARGS[@]} -eq 2 ]]; then
+  WORKTREE_PATH="${POSITIONAL_ARGS[0]}"
+  BRANCH="${POSITIONAL_ARGS[1]}"
+  EXPLICIT_PATH=true
+elif [[ ${#POSITIONAL_ARGS[@]} -eq 1 ]]; then
+  FIRST_ARG="${POSITIONAL_ARGS[0]}"
+  # If single argument looks like a path or matches an existing directory, treat as path
+  if [[ "$FIRST_ARG" == /* || "$FIRST_ARG" == ./* || "$FIRST_ARG" == ../* || -d "$FIRST_ARG" ]]; then
+    WORKTREE_PATH="$FIRST_ARG"
+    BRANCH=""
+    EXPLICIT_PATH=true
+  else
+    BRANCH="$FIRST_ARG"
+    WORKTREE_PATH=""
+    EXPLICIT_PATH=false
+  fi
+else
+  error "Usage: ddev wt-add <branch>  OR  ddev wt-add <path> <branch>"
+fi
+[[ ! -d "${DDEV_APPROOT}/.ddev" ]] && error "No .ddev directory found. Expected at: ${DDEV_APPROOT}/.ddev"
+
+MAIN_WORKTREE_ABS="${DDEV_APPROOT}"
+
+# ── Project config (auto-generated if missing) ────────────────────────────────
+if [[ ! -f "${MAIN_WORKTREE_ABS}/.ddev/worktree.yaml" ]]; then
+  _wt_generate_config "$MAIN_WORKTREE_ABS" "wt-add"
+  echo ""
+fi
+_wt_load_config "$MAIN_WORKTREE_ABS"
+
+# ── Derive directory name and path ────────────────────────────────────────────
+if [[ -z "$WORKTREE_PATH" ]]; then
+  # Auto-derive path from branch name inside WORKTREES_DIR
+  # feature/VREEMDEVO-57 → worktrees/feature-VREEMDEVO-57
+  BRANCH_CLEAN="${BRANCH##origin/}"      # strip remote prefix
+  WORKTREE_DIR="${BRANCH_CLEAN//\//-}"   # slashes → dashes
+  WORKTREE_PATH="${WORKTREES_DIR_ABS}/${WORKTREE_DIR}"
+else
+  WORKTREE_DIR=$(basename "$WORKTREE_PATH")
+  WORKTREE_DIR="${WORKTREE_DIR//\//-}"
+fi
+
+DDEV_PROJECT_NAME=$(_wt_ddev_project_name "$WT_PREFIX" "$WORKTREE_DIR")
+
+echo ""
+echo -e "${BOLD}Creating worktree: ${CYAN}${WORKTREE_DIR}${NC}"
+echo -e "${DIM}  Path   : ${WORKTREE_PATH}${NC}"
+echo -e "${DIM}  Branch : ${BRANCH:-"(new: ${WORKTREE_DIR})"}${NC}"
+echo -e "${DIM}  DDEV   : ${DDEV_PROJECT_NAME}.ddev.site${NC}"
+echo ""
+
+# ── Gitignore: add-on files + worktrees dir ───────────────────────────────────
+# Normally added by the add-on's post_install_actions; this is a backstop for
+# projects where .gitignore didn't exist at install time. Keep the block in
+# sync with install.yaml. To ship the add-on with the project, remove the
+# block from .gitignore and commit the files.
+GITIGNORE="${MAIN_WORKTREE_ABS}/.gitignore"
+if [[ -f "$GITIGNORE" ]] && ! grep -qF "ddev-worktree add-on" "$GITIGNORE"; then
+  cat >> "$GITIGNORE" <<'GITIGNORE_BLOCK'
+
+# ddev-worktree add-on — remove this block to commit the add-on to the project
+.ddev/commands/host/wt-*
+.ddev/worktree-hooks/
+.ddev/worktree-lib/
+.ddev/worktree-shell/
+.ddev/worktree-templates/
+.ddev/worktree.yaml
+.ddev/addon-metadata/ddev-worktree/
+GITIGNORE_BLOCK
+  success "Added ddev-worktree block to .gitignore (remove block to commit add-on)"
+fi
+
+# Add worktrees_dir to .gitignore when it lives inside the project tree.
+# Checked every run so it handles newly-configured or changed worktrees_dir values.
+# Skipped for absolute paths and paths that escape the project root (../).
+if [[ -f "$GITIGNORE" ]] && [[ "$WORKTREES_DIR" != /* ]] && [[ "$WORKTREES_DIR" != ../* ]]; then
+  _wt_entry="${WORKTREES_DIR%/}/"
+  if ! grep -qxF "$_wt_entry" "$GITIGNORE" && ! grep -qxF "${_wt_entry%/}" "$GITIGNORE"; then
+    echo "$_wt_entry" >> "$GITIGNORE"
+    success "Added ${_wt_entry} to .gitignore"
+  fi
+fi
+
+# Ignore the generated CLAUDE.local.md in every worktree without touching
+# tracked .gitignore files: info/exclude lives in the shared .git dir, so one
+# entry covers all worktrees regardless of what each branch's .gitignore says.
+_EXCLUDE_FILE="${MAIN_WORKTREE_ABS}/.git/info/exclude"
+if ! grep -qxF "CLAUDE.local.md" "$_EXCLUDE_FILE" 2>/dev/null; then
+  mkdir -p "$(dirname "$_EXCLUDE_FILE")"
+  echo "CLAUDE.local.md" >> "$_EXCLUDE_FILE"
+fi
+
+# Safely create parent target directory only if it's an auto-derived path or local relative setup
+if [[ "$EXPLICIT_PATH" == "false" ]] || [[ "$WORKTREE_PATH" != /* ]]; then
+  mkdir -p "$(dirname "$WORKTREE_PATH")"
+fi
+
+# Validate absolute path parent directory exists
+if [[ "$EXPLICIT_PATH" == "true" ]] && [[ "$WORKTREE_PATH" == /* ]]; then
+  parent_dir="$(dirname "$WORKTREE_PATH")"
+  if [[ ! -d "$parent_dir" ]]; then
+    error "Parent directory does not exist: $parent_dir\nCreate it first: sudo mkdir -p \"$parent_dir\""
+  fi
+fi
+
+# ── Create the git worktree ───────────────────────────────────────────────────
+header "Creating git worktree"
+
+# Guard against pre-existing paths. Three cases:
+#   registered worktree  → point at wt-repair / wt-remove
+#   existing EMPTY dir   → fine, git worktree add accepts it (documented flow)
+#   anything else        → stale leftovers, tell the user how to clean up
+if [[ -e "$WORKTREE_PATH" ]]; then
+  if git -C "${DDEV_APPROOT}" worktree list --porcelain 2>/dev/null \
+      | grep -qxF "worktree $(_wt_realpath "$WORKTREE_PATH")"; then
+    error "Worktree already exists at: ${WORKTREE_PATH}
+  Re-apply its DDEV config with:  ddev wt-repair ${WORKTREE_DIR}
+  Or remove and recreate it with: ddev wt-remove ${WORKTREE_DIR}"
+  elif [[ -d "$WORKTREE_PATH" ]] && [[ -z "$(ls -A "$WORKTREE_PATH" 2>/dev/null)" ]]; then
+    info "Using existing empty directory: ${WORKTREE_PATH}"
+  else
+    error "Path already exists and is not an empty directory: ${WORKTREE_PATH}
+  Remove the stale path, then re-run:  rm -rf '${WORKTREE_PATH}' && git -C '${DDEV_APPROOT}' worktree prune"
+  fi
+fi
+
+if [[ -n "$BRANCH" ]]; then
+  # Strip only known prefixes — do NOT use ##*/ which strips the last segment
+  # and would turn feature/RECTAVIPRO-6 into RECTAVIPRO-6 (wrong).
+  LOCAL_BRANCH="${BRANCH#origin/}"         # origin/feature/X → feature/X
+  LOCAL_BRANCH="${LOCAL_BRANCH#refs/heads/}"  # refs/heads/feature/X → feature/X
+
+  EXISTS_LOCAL=false
+  EXISTS_REMOTE=false
+  git -C "${DDEV_APPROOT}" show-ref --verify --quiet "refs/heads/${LOCAL_BRANCH}" 2>/dev/null && EXISTS_LOCAL=true
+
+  if ! $EXISTS_LOCAL; then
+    # ls-remote --exit-code: 0 = branch exists, 2 = no such branch, anything
+    # else = couldn't reach the remote. Distinguish the last case so an offline
+    # run doesn't silently fork a new branch when the user meant to track one.
+    set +e
+    git -C "${DDEV_APPROOT}" ls-remote --exit-code --heads origin "$LOCAL_BRANCH" &>/dev/null
+    _ls_rc=$?
+    set -e
+    if [[ $_ls_rc -eq 0 ]]; then
+      EXISTS_REMOTE=true
+    elif [[ $_ls_rc -ne 2 ]]; then
+      warn "Could not reach 'origin' to check for a remote branch (offline? auth?)."
+      warn "Proceeding as a NEW local branch. If you meant to track origin/${LOCAL_BRANCH},"
+      warn "remove this worktree and re-run once the remote is reachable."
+    fi
+  fi
+
+  if $EXISTS_LOCAL; then
+    info "Checking out existing local branch: ${LOCAL_BRANCH}"
+    git -C "${DDEV_APPROOT}" worktree add "$WORKTREE_PATH" "$LOCAL_BRANCH"
+
+  elif $EXISTS_REMOTE; then
+    info "Tracking remote branch: origin/${LOCAL_BRANCH}"
+    git -C "${DDEV_APPROOT}" worktree add -b "$LOCAL_BRANCH" "$WORKTREE_PATH" "origin/${LOCAL_BRANCH}"
+
+  else
+    # Resolve --from to a real ref. Do NOT silently substitute HEAD: the main
+    # checkout may have a different branch checked out, and "--from=main" must
+    # mean main — falling back to origin/<base> covers a main that only exists
+    # remotely.
+    BASE="HEAD"
+    if [[ -n "$FROM_BASE" ]]; then
+      if git -C "${DDEV_APPROOT}" rev-parse --verify --quiet "${FROM_BASE}^{commit}" >/dev/null; then
+        BASE="$FROM_BASE"
+      elif git -C "${DDEV_APPROOT}" rev-parse --verify --quiet "origin/${FROM_BASE}^{commit}" >/dev/null; then
+        BASE="origin/${FROM_BASE}"
+      else
+        error "--from=${FROM_BASE}: no such ref (tried '${FROM_BASE}' and 'origin/${FROM_BASE}')."
+      fi
+    fi
+    info "Creating new local branch: ${LOCAL_BRANCH}  (from ${BASE})"
+    git -C "${DDEV_APPROOT}" worktree add -b "$LOCAL_BRANCH" "$WORKTREE_PATH" "$BASE"
+    success "New branch created — push when ready: git push -u origin ${LOCAL_BRANCH}"
+  fi
+else
+  # Path-only invocation: git creates a new branch named after the directory.
+  git -C "${DDEV_APPROOT}" worktree add "$WORKTREE_PATH"
+fi
+
+success "Git worktree created."
+WORKTREE_ABS=$(_wt_realpath "$WORKTREE_PATH")
+
+# Path-only invocation (no branch given) means LOCAL_BRANCH was never assigned.
+# Derive it now so the Claude context heredoc doesn't trip set -u.
+LOCAL_BRANCH="${LOCAL_BRANCH:-$(git -C "$WORKTREE_ABS" branch --show-current 2>/dev/null || echo "detached")}"
+[[ -z "$LOCAL_BRANCH" ]] && LOCAL_BRANCH="detached"
+
+# ── Set up DDEV ───────────────────────────────────────────────────────────────
+header "Configuring DDEV"
+
+_wt_apply_ddev_config "$MAIN_WORKTREE_ABS" "$WORKTREE_ABS"
+success "DDEV config ready  →  ${DDEV_PROJECT_NAME}.ddev.site"
+
+# ── Claude Code context ───────────────────────────────────────────────────────
+# CLAUDE.local.md is auto-loaded by Claude Code from the worktree root and is
+# ignored via .git/info/exclude (added above), so it never dirties git status.
+header "Setting up Claude Code context"
+
+TEMPLATE_INSTRUCTIONS="${MAIN_WORKTREE_ABS}/.ddev/worktree-templates/claude/instructions.md"
+MAIN_CLAUDE_INSTRUCTIONS="${MAIN_WORKTREE_ABS}/.claude/instructions.md"
+
+{
+  cat <<EOF
+# Worktree Context (generated by ddev-worktree)
+
+## Environment
+- **Worktree**: \`${WORKTREE_DIR}\` — an isolated git worktree, NOT the main checkout
+- **Branch**: \`${LOCAL_BRANCH}\` — all commits here go to this branch
+- **DDEV URL**: https://${DDEV_PROJECT_NAME}.ddev.site
+- **Main checkout**: ${MAIN_WORKTREE_ABS}
+- **Created**: $(date '+%Y-%m-%d %H:%M:%S')
+
+This worktree has its own DDEV environment and database, fully isolated from
+the main checkout and from other worktrees.
+
+## Common commands
+\`\`\`bash
+ddev wt-sync              # Sync DB from staging (--env=live for live)
+ddev wt-status            # Git + DDEV status across all worktrees
+ddev drush <command>      # Drupal commands
+ddev mysql                # Access this worktree's database
+ddev logs                 # View logs
+\`\`\`
+
+## Git
+\`\`\`bash
+git push -u origin ${LOCAL_BRANCH}  # First push (sets upstream)
+\`\`\`
+
+## When done
+From the main checkout: \`ddev wt-remove ${WORKTREE_DIR}\` (stops DDEV, removes the worktree).
+EOF
+  if [[ -f "$MAIN_CLAUDE_INSTRUCTIONS" ]]; then
+    echo ""
+    cat "$MAIN_CLAUDE_INSTRUCTIONS"
+  elif [[ -f "$TEMPLATE_INSTRUCTIONS" ]]; then
+    echo ""
+    cat "$TEMPLATE_INSTRUCTIONS"
+  fi
+} > "${WORKTREE_ABS}/CLAUDE.local.md"
+
+if [[ -f "$MAIN_CLAUDE_INSTRUCTIONS" ]]; then
+  info "Included project instructions from .claude/instructions.md"
+elif [[ -f "$TEMPLATE_INSTRUCTIONS" ]]; then
+  info "Included project instructions from the add-on template"
+fi
+success "Claude Code context written to CLAUDE.local.md"
+
+# ── Git safety hooks (explicit opt-in, not a side effect) ─────────────────────
+if [[ ! -f "${MAIN_WORKTREE_ABS}/.git/hooks/pre-push" ]] \
+    && [[ -d "${MAIN_WORKTREE_ABS}/.ddev/worktree-hooks" ]]; then
+  info "Tip: enable the git safety hooks (push confirmation, protected branches):"
+  echo -e "       ${CYAN}ddev wt-hooks-install${NC}"
+fi
+
+# ── Start DDEV ────────────────────────────────────────────────────────────────
+if [[ "$NO_START" == "false" ]]; then
+  header "Starting DDEV"
+  pushd "$WORKTREE_ABS" > /dev/null
+  ddev start
+  # Varnish marks the backend "sick" if it probes before Apache is ready.
+  # A restart after the initial start resets health state and fixes 503s.
+  if [[ -f "${WORKTREE_ABS}/.ddev/docker-compose.varnish.yaml" ]]; then
+    info "Varnish detected — restarting to reset backend health state..."
+    ddev restart
+  fi
+  popd > /dev/null
+  success "DDEV running at https://${DDEV_PROJECT_NAME}.ddev.site"
+
+  # ── Composer install ─────────────────────────────────────────────────────────
+  if [[ "$NO_COMPOSER" == "false" ]] && _wt_needs_composer "$WORKTREE_ABS"; then
+    header "Installing Composer dependencies"
+    _wt_unlock_sites_default "$WORKTREE_ABS"
+    pushd "$WORKTREE_ABS" > /dev/null
+    ddev composer install
+    popd > /dev/null
+    success "Composer install complete."
+  elif [[ "$NO_COMPOSER" == "false" ]] && [[ -f "${WORKTREE_ABS}/composer.json" ]]; then
+    info "vendor/ already up to date — skipping composer install."
+  fi
+fi
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}${GREEN}✓ Worktree ready${NC}"
+echo -e "  Directory : ${CYAN}${WORKTREE_ABS}${NC}"
+echo -e "  Branch    : $(git -C "$WORKTREE_ABS" branch --show-current 2>/dev/null || echo 'detached')"
+echo -e "  DDEV URL  : ${BLUE}https://${DDEV_PROJECT_NAME}.ddev.site${NC}"
+echo ""
+echo -e "  Next: ${CYAN}cd ${WORKTREE_PATH} && ddev wt-sync${NC}  (sync DB from remote)"
+echo ""

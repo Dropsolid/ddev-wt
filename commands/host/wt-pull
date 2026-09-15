@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Pull latest remote changes for one or all worktrees (without leaving current dir)
+## Usage: wt-pull [name] [--all]
+## Example: "ddev wt-pull" or "ddev wt-pull feature-DS-123" or "ddev wt-pull --all"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+TARGET=""
+PULL_ALL=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --all) PULL_ALL=true ;;
+    -*)    warn "Unknown flag: $arg" ;;
+    *)     [[ -z "$TARGET" ]] && TARGET="$arg" ;;
+  esac
+done
+
+# Collect all worktree paths
+declare -a ALL_PATHS
+while IFS= read -r p; do
+  ALL_PATHS+=("$p")
+done < <(_wt_worktree_paths)
+
+[[ ${#ALL_PATHS[@]} -eq 0 ]] && error "Not in a git repository."
+
+MAIN_WORKTREE=$(_wt_main_worktree) || MAIN_WORKTREE=""
+[[ -n "$MAIN_WORKTREE" ]] && _wt_load_config "$MAIN_WORKTREE"
+
+pull_worktree() {
+  local wt_path="$1"
+  local name branch result
+
+  name=$(basename "$wt_path")
+  branch=$(git -C "$wt_path" branch --show-current 2>/dev/null || echo "detached")
+
+  header "${name}  ${DIM}(${branch})${NC}"
+
+  # Check for uncommitted changes first
+  if [[ -n "$(git -C "$wt_path" status --porcelain 2>/dev/null)" ]]; then
+    warn "Uncommitted changes present — pull may conflict. Proceeding anyway."
+  fi
+
+  # Check tracking branch
+  if ! git -C "$wt_path" rev-parse --abbrev-ref "@{u}" &>/dev/null; then
+    warn "No upstream tracking branch. Skipping."
+    return 0
+  fi
+
+  # Fast-forward only. Anything else (diverged history, conflicts) needs a
+  # human decision — an unattended merge could leave conflict markers behind
+  # in a worktree nobody is looking at.
+  if ! result=$(git -C "$wt_path" pull --ff-only 2>&1); then
+    echo -e "  ${RED}Pull failed (diverged or conflicting):${NC}"
+    echo "$result" | sed 's/^/    /'
+    echo -e "  ${DIM}Resolve manually in ${wt_path} (e.g. git pull --rebase).${NC}"
+    return 1
+  fi
+
+  if echo "$result" | grep -q "Already up to date"; then
+    echo -e "  ${DIM}Already up to date.${NC}"
+  else
+    echo "$result" | grep -v "^From " | sed 's/^/  /'
+    success "Pulled."
+  fi
+}
+
+echo ""
+echo -e "${BOLD}Pulling worktrees${NC}"
+
+FAILED=0
+
+if $PULL_ALL; then
+  # `|| ...` so one failing worktree doesn't abort the sweep under set -e.
+  for path in "${ALL_PATHS[@]}"; do
+    pull_worktree "$path" || ((FAILED++)) || true
+  done
+
+elif [[ -n "$TARGET" ]]; then
+  RESOLVED=$(_wt_resolve_worktree "$TARGET" "${WORKTREES_DIR_ABS:-}") \
+    || error "Worktree not found: ${TARGET}"
+  pull_worktree "$RESOLVED" || ((FAILED++)) || true
+
+else
+  # Default: pull current worktree
+  pull_worktree "$PWD" || ((FAILED++)) || true
+fi
+
+echo ""
+if [[ $FAILED -gt 0 ]]; then
+  warn "${FAILED} worktree(s) could not be pulled — see output above."
+  echo ""
+  exit 1
+fi

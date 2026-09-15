@@ -1,0 +1,60 @@
+#ddev-generated
+name: ddev-worktree
+
+project_files:
+  - commands/host/wt-add
+  - commands/host/wt-remove
+  - commands/host/wt-list
+  - commands/host/wt-sync
+  - commands/host/wt-hooks-install
+  - commands/host/wt-repair
+  - commands/host/wt-shell-install
+  - commands/host/wt-status
+  - commands/host/wt-pull
+  - commands/host/wt-ai
+  - worktree-lib/lib.sh
+  - worktree-shell/wt.fish
+  - worktree-shell/wt-ai.fish
+  - worktree-shell/wt.bash
+  - worktree-hooks/pre-commit
+  - worktree-hooks/pre-push
+  - worktree-templates/claude/instructions.md
+  - worktree.yaml.example
+
+global_files: []
+
+pre_install_actions: []
+
+post_install_actions:
+  # Gitignore everything the add-on installs so `ddev add-on get` doesn't leave
+  # the project tree dirty. The block is marker-guarded (idempotent across
+  # updates) and documented as removable: teams that want to ship the add-on
+  # with the project delete the block and commit the files instead.
+  # Actions run in the project's .ddev directory, hence ../.gitignore.
+  - |
+    #ddev-description:Add the add-on's paths to the project .gitignore
+    GITIGNORE="../.gitignore"
+    if [ -f "$GITIGNORE" ] && ! grep -qF "ddev-worktree add-on" "$GITIGNORE"; then
+      cat >> "$GITIGNORE" <<'GITIGNORE_BLOCK'
+
+    # ddev-worktree add-on — remove this block to commit the add-on to the project
+    .ddev/commands/host/wt-*
+    .ddev/worktree-hooks/
+    .ddev/worktree-lib/
+    .ddev/worktree-shell/
+    .ddev/worktree-templates/
+    .ddev/worktree.yaml
+    .ddev/addon-metadata/ddev-worktree/
+    GITIGNORE_BLOCK
+      echo "Added ddev-worktree block to .gitignore (remove the block to commit the add-on)."
+    fi
+  - "echo ''"
+  - "echo 'ddev-worktree installed successfully!'"
+  - "echo '  1. Run: ddev wt-hooks-install   (enable safety git hooks)'"
+  - "echo '  2. Run: ddev wt-shell-install   (install wt shell switcher)'"
+  - "echo '  3. Run: ddev wt-add <branch>    (create your first worktree)'"
+  - "echo ''"
+  - "echo '.ddev/worktree.yaml is auto-generated on first use — review project_name after.'"
+  - "echo ''"
+
+yaml_read_files: {}

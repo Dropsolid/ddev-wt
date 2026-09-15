@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Install the 'wt' shell function for quickly switching between worktrees
+## Usage: wt-shell-install [--shell=fish|bash|zsh] [--force]
+## Example: "ddev wt-shell-install" or "ddev wt-shell-install --shell=bash"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+# Portable sed -i (macOS BSD sed requires an empty-string backup suffix)
+_sed_i() {
+  if [[ "$(uname)" == "Darwin" ]]; then sed -i '' "$@"; else sed -i "$@"; fi
+}
+
+FORCE=false
+SHELL_OVERRIDE=""
+
+for arg in "$@"; do
+  case "$arg" in
+    --force)       FORCE=true ;;
+    --shell=*)     SHELL_OVERRIDE="${arg#--shell=}" ;;
+  esac
+done
+
+SHELL_NAME="${SHELL_OVERRIDE:-$(basename "${SHELL:-bash}")}"
+TEMPLATES="${DDEV_APPROOT}/.ddev/worktree-shell"
+
+echo ""
+echo -e "${BOLD}Installing 'wt' shell function${NC}"
+echo -e "  ${DIM}Shell: ${SHELL_NAME}${NC}"
+echo ""
+
+case "$SHELL_NAME" in
+  fish)
+    FISH_FUNCS="${HOME}/.config/fish/functions"
+    DST="${FISH_FUNCS}/wt.fish"
+    SRC="${TEMPLATES}/wt.fish"
+
+    if [[ ! -f "$SRC" ]]; then
+      echo "Template not found: ${SRC}" >&2; exit 1
+    fi
+
+    mkdir -p "$FISH_FUNCS"
+
+    if [[ -f "$DST" ]] && [[ "$FORCE" == "false" ]]; then
+      warn "~/.config/fish/functions/wt.fish already exists. Use --force to overwrite."
+      exit 0
+    fi
+
+    cp "$SRC" "$DST"
+    # wt-ai needs its own file — fish autoloads by filename, not by function name
+    SRC_AI="${TEMPLATES}/wt-ai.fish"
+    DST_AI="${FISH_FUNCS}/wt-ai.fish"
+    if [[ -f "$SRC_AI" ]]; then
+      if [[ ! -f "$DST_AI" ]] || [[ "$FORCE" == "true" ]]; then
+        cp "$SRC_AI" "$DST_AI"
+      fi
+    fi
+    success "Installed ~/.config/fish/functions/wt.fish + wt-ai.fish"
+    info "Fish auto-loads by filename — both 'wt' and 'wt-ai' are immediately available."
+    echo ""
+    info "To activate in the current shell:"
+    echo -e "  ${CYAN}source ~/.config/fish/functions/wt.fish${NC}"
+    echo -e "  ${CYAN}source ~/.config/fish/functions/wt-ai.fish${NC}"
+    ;;
+
+  bash|zsh)
+    SRC="${TEMPLATES}/wt.bash"
+    if [[ ! -f "$SRC" ]]; then
+      echo "Template not found: ${SRC}" >&2; exit 1
+    fi
+
+    if [[ "$SHELL_NAME" == "zsh" ]]; then
+      RC="${HOME}/.zshrc"
+    else
+      RC="${HOME}/.bashrc"
+    fi
+
+    MARKER="# ddev-worktree: wt function"
+    END_MARKER="# ddev-worktree: end wt function"
+
+    if grep -qF "$MARKER" "$RC" 2>/dev/null; then
+      if [[ "$FORCE" == "false" ]]; then
+        warn "'wt' already present in ${RC}. Use --force to re-install."
+        exit 0
+      fi
+      # Remove the whole previously-installed block (start marker → end marker).
+      # The block defines two functions (wt + wt-ai), so a '/^}$/' range would
+      # stop at the first close brace and orphan wt-ai. Use explicit end marker.
+      _sed_i "/${MARKER}/,/${END_MARKER}/d" "$RC"
+    fi
+
+    {
+      echo ""
+      echo "$MARKER"
+      cat "$SRC"
+      echo "$END_MARKER"
+    } >> "$RC"
+
+    success "Appended to ${RC}"
+    info "To use in the current shell:"
+    echo -e "  ${CYAN}source ${RC}${NC}"
+    ;;
+
+  *)
+    echo "Unsupported shell: ${SHELL_NAME}" >&2
+    echo "Supported: fish, bash, zsh"
+    echo "Manual install: copy .ddev/worktree-shell/wt.fish or wt.bash to your shell config."
+    exit 1
+    ;;
+esac
+
+echo ""
+echo -e "${BOLD}Usage:${NC}"
+echo -e "  ${CYAN}wt${NC}            interactive picker (arrow keys + enter, or numbered list)"
+echo -e "  ${CYAN}wt 57${NC}         partial match  →  feature-VREEMDEVO-57"
+echo -e "  ${CYAN}wt main${NC}       jump to main checkout"
+echo -e "  ${CYAN}wt 2${NC}          jump by number"
+echo -e "  ${CYAN}wt ls${NC}         list all worktrees with status"
+echo ""
+if ! command -v fzf &>/dev/null; then
+  warn "fzf not found — install it for arrow-key navigation:"
+  echo -e "  ${CYAN}sudo apt install fzf${NC}  or  ${CYAN}brew install fzf${NC}"
+  echo ""
+fi

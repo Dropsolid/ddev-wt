@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+#ddev-generated
+# ddev-worktree: pre-commit safety hook
+# Shows a clear worktree/branch context banner before every commit.
+# Blocks direct commits to main/master (override with --no-verify).
+
+BOLD='\033[1m'; CYAN='\033[0;36m'; GREEN='\033[0;32m'
+YELLOW='\033[1;33m'; RED='\033[0;31m'; DIM='\033[2m'; NC='\033[0m'
+
+# Detect if we are in a worktree (vs main checkout)
+IS_WORKTREE=false
+[[ -f "$(git rev-parse --show-toplevel 2>/dev/null)/.git" ]] && IS_WORKTREE=true
+
+WORKTREE_PATH=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
+WORKTREE_NAME=$(basename "$WORKTREE_PATH")
+BRANCH=$(git branch --show-current 2>/dev/null || echo "detached HEAD")
+
+# Count staged files
+STAGED_COUNT=$(git diff --cached --name-only 2>/dev/null | wc -l | xargs)
+
+# ── Protected branches: defaults + .ddev/worktree.yaml entries ────────────────
+# NOTE: this hook is a standalone artifact copied into .git/hooks/ — it cannot
+# rely on the add-on's shared library, so the small YAML list parser below is
+# deliberately duplicated (kept in sync with _wt_yaml_list in worktree-lib).
+# Do NOT parse this with an awk range (/key:/,/^[^ ]/): in awk the end pattern
+# is tested against the SAME record that starts the range, so a top-level key
+# closes the range on its own line and the list items are never emitted.
+_config_protected_branches() {
+  local file="$1" line v rest e inlist=0
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line; do
+    if [[ "$line" == protected_branches:* ]]; then
+      v="${line#protected_branches:}"; v="${v%%#*}"
+      if [[ "$v" == *"["*"]"* ]]; then         # flow style: [a, b, c]
+        rest="${v#*\[}"; rest="${rest%%\]*},"
+        while [[ -n "$rest" ]]; do
+          e="${rest%%,*}"; rest="${rest#*,}"
+          e=$(printf '%s' "$e" | xargs 2>/dev/null)
+          e="${e#[\"\']}"; e="${e%[\"\']}"
+          [[ -n "$e" ]] && printf '%s\n' "$e"
+        done
+        return 0
+      fi
+      inlist=1; continue
+    fi
+    (( inlist )) || continue
+    if [[ "$line" =~ ^[[:space:]]+-[[:space:]]* ]]; then  # block style: "  - a"
+      e="${line#*-}"; e="${e%%#*}"
+      e=$(printf '%s' "$e" | xargs 2>/dev/null)
+      e="${e#[\"\']}"; e="${e%[\"\']}"
+      [[ -n "$e" ]] && printf '%s\n' "$e"
+    elif [[ "$line" =~ ^[^[:space:]#] ]]; then
+      inlist=0
+    fi
+  done < "$file"
+}
+
+PROTECTED_BRANCHES="main master develop production staging"
+while IFS= read -r _extra; do
+  [[ -z "$_extra" ]] && continue
+  case " $PROTECTED_BRANCHES " in
+    *" $_extra "*) ;;
+    *) PROTECTED_BRANCHES="$PROTECTED_BRANCHES $_extra" ;;
+  esac
+done < <(_config_protected_branches "${WORKTREE_PATH}/.ddev/worktree.yaml")
+
+IS_PROTECTED=false
+for pb in $PROTECTED_BRANCHES; do
+  [[ "$BRANCH" == "$pb" ]] && IS_PROTECTED=true && break
+done
+
+# ── Output banner ─────────────────────────────────────────────────────────────
+echo ""
+if $IS_WORKTREE; then
+  echo -e "  ${BOLD}${CYAN}◈ COMMITTING IN WORKTREE${NC}"
+else
+  echo -e "  ${BOLD}${GREEN}◈ COMMITTING IN MAIN CHECKOUT${NC}"
+fi
+
+echo -e "  ${DIM}Path   :${NC} ${WORKTREE_PATH}"
+echo -e "  ${DIM}Branch :${NC} ${BOLD}${BRANCH}${NC}"
+echo -e "  ${DIM}Files  :${NC} ${STAGED_COUNT} staged file(s)"
+
+if $IS_PROTECTED; then
+  echo ""
+  echo -e "  ${YELLOW}${BOLD}⚠  You are committing directly to a protected branch: ${BRANCH}${NC}"
+  echo -e "  ${YELLOW}   Consider whether this change belongs in a feature branch.${NC}"
+fi
+
+echo ""
+
+# Block commits to main/master with a strong warning (but allow with --no-verify override)
+if $IS_PROTECTED && [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+  echo -e "  ${RED}${BOLD}✗  Direct commits to '${BRANCH}' are not recommended.${NC}"
+  echo -e "  ${RED}   If you are sure, re-run with: git commit --no-verify${NC}"
+  echo ""
+  exit 1
+fi
+
+exit 0

@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Show all git worktrees with their DDEV status in a table
+## Usage: wt-list [--json]
+## Example: "ddev wt-list" or "ddev wt-list --json"
+
+set -euo pipefail
+
+# ── Locate & source the shared helper library ─────────────────────────────────
+_wt_src="${BASH_SOURCE[0]}"
+while [[ -L "$_wt_src" ]]; do
+  _wt_d=$(cd -P "$(dirname "$_wt_src")" && pwd)
+  _wt_src=$(readlink "$_wt_src")
+  [[ "$_wt_src" == /* ]] || _wt_src="${_wt_d}/${_wt_src}"
+done
+_wt_lib="$(cd -P "$(dirname "$_wt_src")/../.." && pwd)/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || _wt_lib="${DDEV_APPROOT:-.}/.ddev/worktree-lib/lib.sh"
+[[ -f "$_wt_lib" ]] || { echo "ddev-worktree: worktree-lib/lib.sh not found — reinstall the add-on." >&2; exit 1; }
+source "$_wt_lib"
+
+JSON_OUTPUT=false
+for arg in "$@"; do
+  [[ "$arg" == "--json" ]] && JSON_OUTPUT=true
+done
+
+# ── Collect git worktrees ────────────────────────────────────────────────────
+WT_RAW=$(git worktree list --porcelain 2>/dev/null) || {
+  echo "Not in a git repository." >&2; exit 1
+}
+
+# ── Collect DDEV project status (cached TSV, jq → python3 → empty fallback) ──
+_wt_ddev_data_load
+
+# ── Parse worktrees ──────────────────────────────────────────────────────────
+declare -a WT_PATHS WT_BRANCHES WT_HEADS WT_BARE
+
+_path=""; _branch=""; _head=""; _bare=false
+while IFS= read -r line; do
+  if [[ "$line" == worktree\ * ]]; then
+    if [[ -n "$_path" ]]; then
+      WT_PATHS+=("$_path"); WT_BRANCHES+=("$_branch")
+      WT_HEADS+=("$_head");  WT_BARE+=("$_bare")
+    fi
+    _path="${line#worktree }"; _branch=""; _head=""; _bare=false
+  elif [[ "$line" == branch\ * ]]; then
+    _branch="${line#branch }"; _branch="${_branch#refs/heads/}"
+  elif [[ "$line" == HEAD\ * ]]; then
+    _head="${line#HEAD }"
+  elif [[ "$line" == "bare" ]]; then
+    _bare=true
+  fi
+done <<< "$WT_RAW"
+[[ -n "$_path" ]] && {
+  WT_PATHS+=("$_path"); WT_BRANCHES+=("$_branch")
+  WT_HEADS+=("$_head");  WT_BARE+=("$_bare")
+}
+
+# Derive the display URL for a worktree: live DDEV data → config.local.yaml
+# name → directory-name convention.
+_row_url() {
+  local path="$1" url _n
+  url="$(_wt_ddev_url_for_path "$path")"
+  if [[ -z "$url" ]]; then
+    _n=$(_wt_yaml_get "${path}/.ddev/config.local.yaml" name)
+    [[ -n "$_n" ]] && url="https://${_n}.ddev.site"
+  fi
+  [[ -z "$url" ]] && url="https://$(basename "$path").ddev.site"
+  printf '%s' "$url"
+}
+
+# ── JSON output mode ─────────────────────────────────────────────────────────
+if [[ "$JSON_OUTPUT" == "true" ]]; then
+  # Built entry-by-entry (comma before each subsequent entry) so skipped bare
+  # worktrees can't leave a trailing comma; all strings JSON-escaped.
+  out=""
+  for i in "${!WT_PATHS[@]}"; do
+    [[ "${WT_BARE[$i]}" == "true" ]] && continue
+    path="${WT_PATHS[$i]}"
+    branch="${WT_BRANCHES[$i]}"
+    status="$(_wt_ddev_status_for_path "$path")"; [[ -z "$status" ]] && status="stopped"
+    url="$(_row_url "$path")"
+    name=$(basename "$path")
+    is_main=$([[ -d "${path}/.git" ]] && echo true || echo false)
+    dirty=$([[ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]] && echo true || echo false)
+    entry="  {\"name\":\"$(_wt_json_escape "$name")\",\"path\":\"$(_wt_json_escape "$path")\",\"branch\":\"$(_wt_json_escape "$branch")\",\"ddev_status\":\"$(_wt_json_escape "$status")\",\"ddev_url\":\"$(_wt_json_escape "$url")\",\"is_main\":$is_main,\"dirty\":$dirty}"
+    [[ -n "$out" ]] && out="${out},"$'\n'
+    out="${out}${entry}"
+  done
+  printf '[\n%s\n]\n' "$out"
+  exit 0
+fi
+
+# ── Terminal table ────────────────────────────────────────────────────────────
+echo ""
+printf "  %s\n" "${BOLD}Git Worktrees${NC}"
+echo ""
+
+# Header — print colors AROUND the printf format, not inside the value
+printf "  "
+printf "%-12s" "DDEV"
+printf "  "
+printf "%-36s" "NAME"
+printf "  "
+printf "%-32s" "BRANCH"
+printf "  "
+printf "%-38s" "URL"
+printf "  FLAGS\n"
+
+printf "  %s\n" "$(printf '─%.0s' {1..120})"
+
+RUNNING_COUNT=0
+WT_COUNT=0
+
+for i in "${!WT_PATHS[@]}"; do
+  [[ "${WT_BARE[$i]}" == "true" ]] && continue
+  ((WT_COUNT++)) || true
+
+  path="${WT_PATHS[$i]}"
+  branch="${WT_BRANCHES[$i]:-${WT_HEADS[$i]:0:8}}"
+  name=$(basename "$path")
+  is_main=false
+  [[ -d "${path}/.git" ]] && is_main=true
+
+  ddev_status="$(_wt_ddev_status_for_path "$path")"
+  ddev_url="$(_row_url "$path")"
+
+  [[ "$ddev_status" == "running" ]] && ((RUNNING_COUNT++)) || true
+
+  # Dirty / unpushed flags (plain strings, no ANSI yet)
+  dirty_out=$(git -C "$path" status --porcelain 2>/dev/null || true)
+  unpushed=$(git -C "$path" rev-list --count @{u}.. 2>/dev/null || echo 0)
+
+  # ── Print one row ──
+  printf "  "
+
+  # DDEV status column: print color BEFORE printf, reset AFTER
+  if [[ "$ddev_status" == "running" ]]; then
+    printf "${GREEN}"
+    printf "%-12s" "● running"
+    printf "${NC}"
+  elif [[ "$ddev_status" == "starting" ]]; then
+    printf "${YELLOW}"
+    printf "%-12s" "● starting"
+    printf "${NC}"
+  else
+    printf "${DIM}"
+    printf "%-12s" "○ stopped"
+    printf "${NC}"
+  fi
+
+  printf "  "
+
+  # Name column: include badge in the padded string so all rows stay aligned
+  if $is_main; then
+    printf "${CYAN}${BOLD}"
+    printf "%-36s" "${name} (main)"
+    printf "${NC}"
+  else
+    printf "${CYAN}"
+    printf "%-36s" "$name"
+    printf "${NC}"
+  fi
+
+  printf "  "
+
+  # Branch column
+  branch_trim="${branch:0:31}"
+  printf "%-32s" "$branch_trim"
+
+  printf "  "
+
+  # URL column
+  url_trim="${ddev_url:0:37}"
+  printf "${BLUE}%-38s${NC}" "$url_trim"
+
+  # Flags — appended after the fixed columns, no width alignment needed
+  [[ -n "$dirty_out" ]] && printf "  ${YELLOW}⚡dirty${NC}"
+  [[ "$unpushed" -gt 0 ]] && printf "  ${BLUE}↑${unpushed}${NC}"
+
+  printf "\n"
+done
+
+echo ""
+printf "  ${DIM}%d worktree(s)  ·  %d DDEV environment(s) running${NC}\n" \
+  "$WT_COUNT" "$RUNNING_COUNT"
+printf "  ${DIM}Run 'ddev wt-status' for per-worktree details${NC}\n"
+echo ""
