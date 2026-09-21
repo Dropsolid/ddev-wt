@@ -40,11 +40,11 @@ ddev wt-shell-install   # wt shell switcher
 
 To pin a specific release instead of the latest tag, add `--version v0.2.0`.
 
-Installing from source instead of the registry works too — clone the repo and
+Installing from source instead of the registry works too, clone the repo and
 point `ddev add-on get` at the local path:
 
 ```bash
-git clone https://github.com/Dropsolid/ddev-wt.git /tmp/ddev-wt
+git clone git@github.com:Dropsolid/ddev-wt.git /tmp/ddev-wt
 ddev add-on get /tmp/ddev-wt
 ```
 
