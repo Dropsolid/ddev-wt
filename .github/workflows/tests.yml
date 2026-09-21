@@ -1,25 +1,29 @@
-# Add-on install smoke test. Verify/update this against the current
-# https://github.com/ddev/ddev-addon-template before relying on it -
-# not yet run in CI, just scaffolded from the standard template pattern.
 name: tests
 
 on:
-  push:
-    branches: ["main", "master"]
   pull_request:
-    branches: ["main", "master"]
+    paths-ignore:
+      - "**.md"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  test:
+  tests:
     name: Test add-on install
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install DDEV
-        uses: ddev/github-action-setup-ddev@v1
-
-      - name: Run add-on tests
-        run: bats ./tests/test.bats
+      - uses: ddev/github-action-add-on-test@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          addon_repository: ${{ github.repository }}
+          addon_ref: ${{ github.ref }}
