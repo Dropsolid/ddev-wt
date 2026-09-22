@@ -3,6 +3,15 @@
 Thanks for considering a contribution. This add-on is maintained as open
 source, and PRs are welcome.
 
+## Origin
+
+`ddev-wt` was originally designed and developed by Milan Gurjanov while working
+at Dropsolid and is maintained as an open-source project under the Dropsolid
+organization.
+
+The project is licensed under the MIT License. See [`LICENSE`](LICENSE) for the
+applicable copyright and license terms.
+
 ## Reporting bugs / requesting features
 
 Open a GitHub issue. Include your OS (Linux/macOS), DDEV version, and the
@@ -20,7 +29,7 @@ ddev add-on get /path/to/your/local/ddev-wt
 ddev restart
 ```
 
-Re-run that after every change — `ddev add-on get` re-copies the files into
+Re-run that after every change, since `ddev add-on get` re-copies the files into
 `.ddev/`.
 
 ## Pull requests
@@ -37,5 +46,5 @@ Re-run that after every change — `ddev add-on get` re-copies the files into
   commands.
 - Prefer explicit error messages (`error "..."` from the shared lib) over
   silent failures.
-- Comments should explain *why*, not *what* — the code should already be
+- Comments should explain *why*, not *what*, since the code should already be
   readable for the *what*.
